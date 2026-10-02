@@ -10,6 +10,25 @@ function fail(error, where) {
   return { data: null, error };
 }
 
+/**
+ * Turn a row-level-security rejection into something a human can act on.
+ * Postgres reports these as code 42501 / "row-level security policy", which is
+ * accurate and completely opaque when you have just been promoted to admin.
+ */
+function explainPermission(error, what) {
+  if (!error) return error;
+  const text = `${error.code || ''} ${error.message || ''}`;
+  const denied = error.code === '42501'
+    || /row-level security|permission denied|violates row-level security/i.test(text);
+  if (!denied) return error;
+
+  const role = store.role;
+  const hint = role === 'admin' || role === 'manager'
+    ? 'Your session still holds an older profile. Press "Refresh my access" on the Info tab, or sign out and back in.'
+    : `Your role is "${role}", which may not ${what}. An admin, manager or gamemaster can change that.`;
+  return { ...error, message: `Not allowed: ${what}. ${hint}` };
+}
+
 /* ------------------------------------------------------------------ users */
 
 export async function loadMyProfile() {
@@ -108,6 +127,14 @@ export async function credentialsFor(playerId) {
   return { data: Array.isArray(data) ? data[0] : data, error: null };
 }
 
+/** Fresh copy of the signed-in user's profile, e.g. after a role change. */
+export async function reloadProfile() {
+  const { data, error } = await loadMyProfile();
+  if (error || !data) return { data: null, error: error || { message: 'profile not found' } };
+  store.setProfile(data);
+  return { data, error: null };
+}
+
 /* ------------------------------------------------------- first-run admin */
 
 /** Has anybody claimed admin on this project yet? */
@@ -157,7 +184,7 @@ export async function createGame({ name, description, gamemasterId, startsAt, en
     created_by: store.user.id,
   };
   const { data, error } = await sb.from('games').insert(payload).select().maybeSingle();
-  if (error) return fail(error, 'game-create');
+  if (error) return fail(explainPermission(error, 'create a game'), 'game-create');
   if (data) await addGameMember(data.id, payload.gamemaster_id, 'gamemaster', false);
   return { data, error: null };
 }
@@ -220,7 +247,7 @@ export async function createTeam(gameId, name, description) {
   const { data, error } = await sb.from('teams')
     .insert({ game_id: gameId, name, description: description || null, created_by: store.user.id })
     .select().maybeSingle();
-  if (error) return fail(error, 'team-create');
+  if (error) return fail(explainPermission(error, 'create a team'), 'team-create');
   return { data, error: null };
 }
 

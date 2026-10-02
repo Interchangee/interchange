@@ -109,6 +109,17 @@ async function boot() {
 
   buildIconbar();
   window.addEventListener('hashchange', render);
+
+  // A role change (promotion, demotion) changes which icons and screens exist,
+  // so rebuild the shell rather than leaving a stale navigation behind.
+  store.on((what) => {
+    if (what !== 'role') return;
+    buildIconbar();
+    markIconbar();
+    render();
+    toast(`Your access changed: ${store.role}`, 'good');
+  });
+
   if (!location.hash) location.hash = '#/home';
   render();
   startBackgroundJobs();

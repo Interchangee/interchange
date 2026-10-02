@@ -28,6 +28,23 @@ export function renderInfo(ctx) {
   ]));
   meCard.appendChild(h('p.tiny.muted', { style: { marginTop: '10px' } },
     ROLE_META[store.role]?.blurb || ''));
+  meCard.appendChild(h('div.row', { style: { marginTop: '12px', flexWrap: 'wrap' } }, [
+    h('button.btn-ghost', {
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = 'Checking…';
+        const { data, error } = await api.reloadProfile();
+        btn.disabled = false;
+        btn.textContent = 'Refresh my access';
+        if (error) return toast(error.message, 'bad');
+        // setProfile emits 'role' when it moved, which rebuilds the whole shell
+        toast(`Your role is ${ROLE_META[data.role]?.label || data.role}`, 'good');
+        ctx.rerender();
+      },
+    }, 'Refresh my access'),
+    h('span.tiny.muted', 'Use this if your role was changed for you.'),
+  ]));
 
   /* --- what my role can do --- */
   const permCard = h('div.card', [h('h3', 'Who can create what')]);

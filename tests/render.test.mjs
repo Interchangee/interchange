@@ -13,7 +13,7 @@
    ========================================================================== */
 
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -508,8 +508,36 @@ await check('claimFirstAdmin() returns the function verdict', async () => {
 
 console.log('\nmigration sanity');
 
-const migrationPath = join(here, '..', 'supabase', 'migrations', '20250101000000_init.sql');
-const sql = await readFile(migrationPath, 'utf8');
+// Migrations are applied in version order, so concat them the same way and
+// audit the result - a later file may redefine an earlier definition.
+const migrationsDir = join(here, '..', 'supabase', 'migrations');
+const migrationFiles = (await readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
+assert.ok(migrationFiles.length >= 1, 'expected at least one migration');
+const sql = (await Promise.all(
+  migrationFiles.map((f) => readFile(join(migrationsDir, f), 'utf8')),
+)).join('\n');
+
+await check('migration files are version ordered by name', () => {
+  for (const f of migrationFiles) {
+    assert.match(f, /^\d{14}_[a-z0-9_]+\.sql$/, `${f} should be <14-digit version>_<name>.sql`);
+  }
+});
+
+await check('a fresh project ends up with the permissive role guard', () => {
+  // The exemption is what makes the first-admin bootstrap possible. Migrations
+  // run in filename order, so the LAST definition of the function is the one a
+  // fresh database ends up with - if a later migration reintroduced the strict
+  // version, this fails.
+  const defs = [...sql.matchAll(
+    /create or replace function public\.guard_profile_role\(\)([\s\S]*?)\$\$;/g,
+  )];
+  assert.ok(defs.length >= 1, 'guard_profile_role must be defined');
+  const effective = defs[defs.length - 1][1];
+  assert.match(effective, /auth\.uid\(\) is null/,
+    'the effective guard must exempt statements that have no session (SQL editor, migrations, service_role)');
+  assert.match(effective, /only an admin can change a role/,
+    'the guard must still reject API clients that are not admins');
+});
 
 await check('the migration defines every helper the app calls', () => {
   for (const fn of [

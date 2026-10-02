@@ -32,7 +32,13 @@ export const store = {
 
   /* ---- profile ---- */
   get profile() { return _profile; },
-  setProfile(p) { _profile = p; this.emit('profile'); },
+  setProfile(p) {
+    // the role decides which screens and icons exist, so signal a change
+    // separately when it moves (e.g. after being promoted to admin)
+    const roleChanged = Boolean(_profile) && Boolean(p) && _profile.role !== p.role;
+    _profile = p;
+    this.emit(roleChanged ? 'role' : 'profile');
+  },
   get role() { return _profile?.role || 'player'; },
   get isStaff() { return ['admin', 'manager', 'gamemaster'].includes(this.role); },
   get isOverseer() { return ['admin', 'manager'].includes(this.role); },

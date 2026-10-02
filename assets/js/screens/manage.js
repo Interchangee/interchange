@@ -18,10 +18,30 @@ export function renderManage(ctx) {
 
   let tab = 'users';
   let search = '';
+  let rechecked = false;
 
   async function render() {
     card.innerHTML = '';
     card.appendChild(h('div.card-head', [h('h2', store.isOverseer ? 'Manage' : 'Organise')]));
+
+    // The role is decided server-side. A promotion made in the SQL editor (or
+    // by another admin) is not visible to a session that loaded earlier, so
+    // re-read it once before showing the "players cannot" message.
+    if (!store.isStaff && !rechecked) {
+      rechecked = true;
+      card.appendChild(h('div', { style: { padding: '16px 0' } }, ui.spinner('dark')));
+      const { data, error } = await api.reloadProfile();
+      card.innerHTML = '';
+      card.appendChild(h('div.card-head', [h('h2', store.isOverseer ? 'Manage' : 'Organise')]));
+      if (error) card.appendChild(h('div.tiny.muted', { style: { marginBottom: '10px' } }, `Could not refresh your role: ${error.message}`));
+      if (data && !store.isStaff) {
+        card.appendChild(ui.emptyState(
+          'Your account is not staff yet. If you were just promoted, sign out and back in, or press '
+          + '"Refresh my access" on the Info tab. Otherwise: players cannot manage users or games.',
+        ));
+        return;
+      }
+    }
 
     if (!store.isStaff) {
       card.appendChild(ui.emptyState('Players cannot manage users or games.'));

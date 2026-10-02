@@ -545,18 +545,37 @@ with check (
 );
 
 -- Nobody may escalate a role, and nobody may rewrite their own identity fields.
+-- Statements with no session at all (the SQL Editor, migrations, service_role)
+-- are allowed through: an API client always carries a JWT, so auth.uid() is
+-- never null for one. Without that exemption the first-admin bootstrap would
+-- be blocked by the guard itself. See 20250101180000_fix_role_guard_bootstrap.sql.
 create or replace function public.guard_profile_role()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  via_admin_path boolean := auth.uid() is null;
 begin
-  if new.role is distinct from old.role and not public.is_admin() then
+  if new.role is distinct from old.role
+     and not via_admin_path
+     and not public.is_admin() then
     raise exception 'only an admin can change a role';
   end if;
-  if new.username is distinct from old.username and not public.is_overseer() then
+
+  if new.username is distinct from old.username
+     and not via_admin_path
+     and not public.is_overseer() then
     raise exception 'only admins and managers can rename an account';
   end if;
-  if new.created_by is distinct from old.created_by and not public.is_admin() then
+
+  if new.created_by is distinct from old.created_by
+     and not via_admin_path
+     and not public.is_admin() then
     raise exception 'created_by is immutable';
   end if;
+
   return new;
 end $$;
 
