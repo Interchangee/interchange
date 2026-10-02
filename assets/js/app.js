@@ -19,7 +19,7 @@ import { renderGame } from './screens/game.js';
 import { renderInfo } from './screens/info.js';
 import { icbar } from './iconbar.js';
 
-const ROUTES = ['home', 'create', 'teams', 'game', 'info'];
+const ROUTES = ['home', 'create', 'teams', 'game', 'manage', 'info'];
 
 const ctx = {
   params: null,
@@ -150,6 +150,7 @@ function render() {
       case 'create': node = renderCreate(ctx); break;
       case 'teams': node = renderTeams(ctx); break;
       case 'game': node = renderGame(ctx); break;
+      case 'manage': node = renderManage(ctx); break;
       case 'info': node = renderInfo(ctx); break;
       default: node = renderHome(ctx);
     }

@@ -1,8 +1,8 @@
-/* ==========================================================================
-   Client-side mirror of the SQL permission rules (supabase/migrations).
-   The database is the real gate; this exists so the UI never offers an
-   action that would be rejected.
-   ========================================================================== */
+/* ========================================================================== 
+   Client-side mirror of the SQL permission rules (supabase/migrations). 
+   The database is the real gate; this exists so the UI never offers an action 
+   that would be rejected. 
+   ========================================================================== */ 
 
 import store from './store.js';
 
@@ -63,6 +63,20 @@ export function canSeeCredentials(profile) {
   return profile.created_by === store.user?.id;
 }
 
+/** Check if the user can create a new game (Max 3 games per gamemaster) */
+export function canCreateGame() {
+  if (!store.games) return true;
+  const myGames = store.games.filter((g) => g.gamemaster_id === store.user?.id);
+  return myGames.length < 3;
+}
+
+/** Check if a player can join a game (Max 3 games, all must be from the same gamemaster) */
+export function canJoinGame(playerGames, targetGamemasterId) {
+  if (!playerGames || playerGames.length === 0) return true;
+  if (playerGames.length >= 3) return false;
+  return playerGames.every((game) => game.gamemaster_id === targetGamemasterId);
+}
+
 /** A short explanation of who can create whom, for the Info screen. */
 export const MATRIX = [
   { role: 'admin', creates: 'admins, managers, gamemasters, players', teams: 'any game', games: 'any' },
@@ -71,4 +85,18 @@ export const MATRIX = [
   { role: 'player', creates: 'nobody', teams: 'none', games: 'tracking only' },
 ];
 
-export default { creatableRoles, canCreateRole, canCreateUsers, canCreateTeams, canManagePoints, assignableGames, canEditProfile, canSeeCredentials, ROLES, ROLE_META, MATRIX };
+export default {
+  creatableRoles,
+  canCreateRole,
+  canCreateUsers,
+  canCreateTeams,
+  canManagePoints,
+  assignableGames,
+  canEditProfile,
+  canSeeCredentials,
+  canCreateGame,
+  canJoinGame,
+  ROLES,
+  ROLE_META,
+  MATRIX,
+};

@@ -1,7 +1,7 @@
 /* ==========================================================================
    The top icon bar - reproduces the six icons from the reference design.
-   Visible items depend on the signed-in role; the layout stays identical
-   (equal columns, white icons on orange) so it always looks the same.
+   Always shows the same six destinations for every role: a stable map of the
+   app beats a role-filtered bar that hides the way out of a dead end.
    ========================================================================== */
 
 import { h } from './dom.js';
@@ -10,22 +10,23 @@ import store from './store.js';
 
 const ITEMS = [
   { route: 'home', icon: 'home', label: 'Home' },
-  { route: 'create', icon: 'qr', label: 'Create players and teams', anyRole: true },
+  { route: 'create', icon: 'qr', label: 'Create players and teams' },
   { route: 'teams', icon: 'people', label: 'Teams' },
-  { route: 'game', icon: 'person', label: 'Games and users' },
+  { route: 'game', icon: 'person', label: 'Game control: games, players, points' },
   { route: 'info', icon: 'checklist', label: 'My account and trips' },
   { route: 'about', icon: 'info', label: 'About', info: true },
 ];
 
+/**
+ * Every destination is always visible.
+ *
+ * Hiding icons by role sounds tidy but produces dead ends: a screen whose only
+ * instruction is "create one from Manage" is useless if Manage has no icon.
+ * Screens now explain what a role may do instead, so the bar is a reliable map
+ * of the app for everyone.
+ */
 export function visibleItems() {
-  const role = store.role;
-  const isOverseer = role === 'admin' || role === 'manager';
-  if (isOverseer) return ITEMS;                 // full navigation
-  if (role === 'gamemaster') {
-    return ITEMS.filter((it) => it.route !== 'game');
-  }
-  // players: tracking + their own account only
-  return ITEMS.filter((it) => it.route === 'home' || it.route === 'info' || it.info);
+  return ITEMS;
 }
 
 export function icbar({ onNavigate, onPoints }) {

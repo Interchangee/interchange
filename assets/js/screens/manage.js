@@ -1,69 +1,55 @@
 /* ==========================================================================
-   Manage (admins + managers): all users, roles, credentials, games,
-   transit agencies / GTFS feeds, and app settings.
+   Staff tools: all users, transit feeds and app settings.
+
+   Games, teams and players are NOT created here - that happens on the Game
+   control tab and in the Teams tab, so staff do not have to hunt for a screen.
+   This is the directory and configuration corner, reached from Game control.
    ========================================================================== */
 
-import { h, esc, toast, confirmDialog, openModal, fmtDateTime, relTime } from '../dom.js';
+import { h, esc, toast, confirmDialog, openModal, relTime } from '../dom.js';
 import * as ui from '../ui.js';
 import store from '../store.js';
 import * as api from '../api.js';
 import { ROLE_META, creatableRoles, canSeeCredentials } from '../authz.js';
 import { bundleMeta, ensureBundle } from '../transit.js';
-import { randomUsername, randomPassword } from './create.js';
+import config from '../config.js';
 
 export function renderManage(ctx) {
   const wrap = h('div');
   const card = h('div.card');
   wrap.appendChild(card);
 
-  let tab = 'users';
+  let tab = ['users', 'transit', 'settings'].includes(ctx.params?.tab) ? ctx.params.tab : 'users';
   let search = '';
-  let rechecked = false;
 
   async function render() {
     card.innerHTML = '';
-    card.appendChild(h('div.card-head', [h('h2', store.isOverseer ? 'Manage' : 'Organise')]));
-
-    // The role is decided server-side. A promotion made in the SQL editor (or
-    // by another admin) is not visible to a session that loaded earlier, so
-    // re-read it once before showing the "players cannot" message.
-    if (!store.isStaff && !rechecked) {
-      rechecked = true;
-      card.appendChild(h('div', { style: { padding: '16px 0' } }, ui.spinner('dark')));
-      const { data, error } = await api.reloadProfile();
-      card.innerHTML = '';
-      card.appendChild(h('div.card-head', [h('h2', store.isOverseer ? 'Manage' : 'Organise')]));
-      if (error) card.appendChild(h('div.tiny.muted', { style: { marginBottom: '10px' } }, `Could not refresh your role: ${error.message}`));
-      if (data && !store.isStaff) {
-        card.appendChild(ui.emptyState(
-          'Your account is not staff yet. If you were just promoted, sign out and back in, or press '
-          + '"Refresh my access" on the Info tab. Otherwise: players cannot manage users or games.',
-        ));
-        return;
-      }
-    }
+    card.appendChild(h('div.card-head', [
+      h('h2', 'Staff tools'),
+      ui.iconButton('refresh', render, { title: 'Refresh', cls: 'plain sm' }),
+    ]));
 
     if (!store.isStaff) {
-      card.appendChild(ui.emptyState('Players cannot manage users or games.'));
+      card.appendChild(ui.emptyState('Only admins, managers and gamemasters can open staff tools.'));
+      card.appendChild(h('button.btn-ghost.btn-block', { onclick: () => ctx.go('game') }, 'Back to Game control'));
       return;
     }
 
-    const tabs = [['users', 'Users'], ['games', 'Games']];
+    const tabs = [['users', 'Users']];
     if (store.isOverseer) tabs.push(['transit', 'Transit feeds'], ['settings', 'Settings']);
     card.appendChild(h('div.tabs', tabs.map(([k, label]) => h('button', {
       'aria-selected': tab === k ? 'true' : 'false',
       onclick: () => { tab = k; render(); },
     }, label))));
 
-    if (tab === 'users') drawUsers();
-    else if (tab === 'games') drawGames();
-    else if (tab === 'transit') drawTransit();
-    else drawSettings();
+    if (tab === 'users') await drawUsers();
+    else if (tab === 'transit') await drawTransit();
+    else await drawSettings();
   }
 
   /* -------------------------------------------------------------- users */
   async function drawUsers() {
-    const host = h('div', [h('div', { style: { padding: '16px 0' } }, ui.spinner('dark'))]);
+    const host = h('div');
     card.appendChild(host);
 
     const searchInput = ui.textInput({ value: search, placeholder: 'Search usernames…' });
@@ -86,14 +72,18 @@ export function renderManage(ctx) {
 
       Object.entries(byRole).forEach(([role, people]) => {
         if (!people.length) return;
-        listHost.appendChild(h('div.small.muted', { style: { margin: '14px 0 8px', textTransform: 'uppercase', letterSpacing: '.6px' } },
-          `${ROLE_META[role].label}s (${people.length})`));
+        listHost.appendChild(h('div.small.muted', {
+          style: { margin: '14px 0 8px', textTransform: 'uppercase', letterSpacing: '.6px' },
+        }, `${ROLE_META[role].label}s (${people.length})`));
         people.forEach((p) => {
           listHost.appendChild(h('div.member', [
             h('div.m-name', [
               h('div', { style: { fontWeight: '600' } }, esc(p.display_name || p.username)),
-              h('div.m-sub', [p.username, p.status !== 'active' ? p.status : null,
-                p.last_seen_at ? `seen ${relTime(p.last_seen_at)}` : 'never signed in'].filter(Boolean).join(' · ')),
+              h('div.m-sub', [
+                p.username,
+                p.status !== 'active' ? p.status : null,
+                p.last_seen_at ? `seen ${relTime(p.last_seen_at)}` : 'never signed in',
+              ].filter(Boolean).join(' · ')),
             ]),
             canSeeCredentials(p) ? ui.iconButton('download', () => showCreds(p), { title: 'Login details', cls: 'sm' }) : null,
             store.isOverseer ? ui.iconButton('star', () => changeRole(p), { title: 'Change role', cls: 'sm' }) : null,
@@ -101,19 +91,16 @@ export function renderManage(ctx) {
           ]));
         });
       });
-
       if (!data?.length) listHost.appendChild(ui.emptyState('No users match.'));
     }
 
-    host.innerHTML = '';
     host.appendChild(searchInput);
     host.appendChild(listHost);
-
     if (creatableRoles().length) {
       host.appendChild(h('button.btn-primary.btn-block', {
         style: { marginTop: '16px' },
-        onclick: () => ctx.go('create', { tab: 'player' }),
-      }, 'Create a user'));
+        onclick: () => ctx.go('game'),
+      }, 'Create accounts from Game control'));
     }
     await load();
   }
@@ -131,11 +118,10 @@ export function renderManage(ctx) {
           h('div', { style: { marginTop: '6px' } }, `role: ${esc(data?.role || p.role)}`),
           data?.games?.length ? h('div', { style: { marginTop: '6px' } }, `games: ${esc(data.games.join(', '))}`) : null,
         ]),
-        h('p.tiny.muted', { style: { marginTop: '10px' } },
-          'The player signs in with the username, not the email.'),
+        h('p.tiny.muted', { style: { marginTop: '10px' } }, 'The player signs in with the username, not the email.'),
       ]),
       actions: [{
-        label: 'Copy', value: 'copy',
+        label: 'Copy',
         onClick: async () => {
           try {
             await navigator.clipboard.writeText(`username: ${data?.username}\npassword: ${data?.password}`);
@@ -171,81 +157,15 @@ export function renderManage(ctx) {
       title: `Status for ${p.username}`,
       body: h('div', [
         ui.field('Status', select),
-        h('p.tiny.muted', 'Suspending blocks sign-in for that account (do it in Supabase Auth as well to be strict).'),
+        h('p.tiny.muted', 'Suspending marks the account. Also disable it in Supabase Auth to block sign-in completely.'),
       ]),
       actions: [{ label: 'Cancel', value: null }, { label: 'Save', value: 'save', kind: 'primary' }],
     });
     if (res !== 'save') return;
-    const status = select.querySelector('select').value;
-    const { error } = await api.updateProfile(p.id, { status });
+    const { error } = await api.updateProfile(p.id, { status: select.querySelector('select').value });
     if (error) return toast(error.message, 'bad');
     toast('Updated', 'good');
     render();
-  }
-
-  /* -------------------------------------------------------------- games */
-  async function drawGames() {
-    const host = h('div', [h('div', { style: { padding: '16px 0' } }, ui.spinner('dark'))]);
-    card.appendChild(host);
-
-    const gamemasters = store.isOverseer
-      ? ((await api.listProfiles({ role: ['gamemaster', 'admin', 'manager'], limit: 300 })).data || [])
-      : [{ id: store.user.id, username: store.profile.username }];
-
-    host.innerHTML = '';
-    host.appendChild(h('h3', { style: { marginTop: 0 } }, 'Games'));
-
-    store.games.forEach((g) => {
-      host.appendChild(h('div.member', [
-        h('div.m-name', [
-          h('div', { style: { fontWeight: '600' } }, esc(g.name)),
-          h('div.m-sub', `${g.gamemaster_name || 'unknown gm'} · ${g.status}${g.is_staff ? ' · you staff this' : ''}`),
-        ]),
-        h('button.btn-ghost.small', {
-          onclick: () => {
-            const found = store.games.find((x) => x.id === g.id);
-            store.setGame(found);
-            toast(`Active game: ${g.name}`, 'good');
-            ctx.onGameChange?.();
-          },
-        }, store.game?.id === g.id ? 'Active' : 'Set active'),
-      ]));
-    });
-
-    host.appendChild(h('h3', { style: { marginTop: '20px' } }, 'New game'));
-    const name = ui.textInput({ placeholder: 'e.g. Saturday Sprint' });
-    const desc = ui.textInput({ placeholder: 'optional description' });
-    const gmSelect = ui.selectInput(gamemasters.map((p) => ({ value: p.id, label: p.username })), { value: store.user.id });
-    const start = h('input', { type: 'date' });
-    const end = h('input', { type: 'date' });
-
-    host.appendChild(h('div', { style: { display: 'grid', gap: '10px' } }, [
-      ui.field('Name', name),
-      ui.field('Description', desc),
-      ui.field('Gamemaster', gmSelect, 'Who runs this game? They can create players and teams for it.'),
-      h('div.row', [
-        h('div', { style: { flex: 1 } }, ui.field('Starts', start)),
-        h('div', { style: { flex: 1 } }, ui.field('Ends', end)),
-      ]),
-      h('button.btn-primary.btn-block', {
-        onclick: async () => {
-          if (name.value.trim().length < 2) return toast('Give the game a name', 'bad');
-          const { data, error } = await api.createGame({
-            name: name.value.trim(),
-            description: desc.value.trim() || null,
-            gamemasterId: gmSelect.querySelector('select').value,
-            startsAt: start.value ? new Date(start.value).toISOString() : null,
-            endsAt: end.value ? new Date(end.value).toISOString() : null,
-          });
-          if (error) return toast(error.message, 'bad');
-          toast('Game created', 'good');
-          await ctx.reloadGames();
-          const created = store.games.find((g) => g.id === data.id);
-          if (created) store.setGame(created);
-          render();
-        },
-      }, 'Create game'),
-    ]));
   }
 
   /* ------------------------------------------------------------ transit */
@@ -254,13 +174,12 @@ export function renderManage(ctx) {
     card.appendChild(host);
     const { data: agencies } = await api.listAgencies();
 
-    host.appendChild(h('h3', { style: { marginTop: 0 } }, 'Transit feeds'));
     host.appendChild(h('p.small.muted',
-      'Stops come from OpenStreetMap (Overpass). Schedules and route shapes come from a GTFS zip. Both are free — paste the feed url your city publishes.'));
+      'Stops come from OpenStreetMap. Schedules and route shapes come from a GTFS zip. Both are free — paste the feed url your city publishes.'));
 
-    (agencies || []).forEach(async (a) => {
+    for (const a of agencies || []) {
       const meta = await bundleMeta(a);
-      const row = h('div.member', [
+      host.appendChild(h('div.member', [
         h('div.m-name', [
           h('div', { style: { fontWeight: '600' } }, esc(a.name)),
           h('div.m-sub.nowrap', a.static_gtfs_url || 'no GTFS url set'),
@@ -269,51 +188,46 @@ export function renderManage(ctx) {
             : 'not downloaded on this device yet'),
         ]),
         ui.iconButton('download', async () => {
-          toast('Downloading GTFS…');
-          const res = await ensureBundle(a, { force: true, onProgress: (p) => {
-            if (p.phase === 'stop_times' || p.phase === 'trips') toast(`Indexing ${p.phase}…`);
-          } });
+          const res = await ensureBundle(a, { force: true });
           if (res.error) toast(res.error, 'bad');
           else toast(`Feed ready: ${res.bundle.stops.length} stops`, 'good');
           render();
         }, { title: 'Download feed now', cls: 'sm' }),
         ui.iconButton('edit', () => editAgency(a), { title: 'Edit', cls: 'sm' }),
-      ]);
-      host.appendChild(row);
-    });
+      ]));
+    }
 
-    host.appendChild(h('div', { style: { marginTop: '18px' } }, [
-      h('h3', 'Add a feed'),
-      (() => {
-        const key = ui.textInput({ placeholder: 'my-city' });
-        const name = ui.textInput({ placeholder: 'My City Transit' });
-        const tz = ui.textInput({ placeholder: 'Europe/Berlin' });
-        const gtfs = ui.textInput({ placeholder: 'https://…/google_transit.zip' });
-        const rt = ui.textInput({ placeholder: 'https://…/vehiclepositions.pb (optional)' });
-        return h('div', { style: { display: 'grid', gap: '10px' } }, [
-          h('div.row', [h('div', { style: { flex: 1 } }, ui.field('Key', key)), h('div', { style: { flex: 2 } }, ui.field('Name', name))]),
-          ui.field('Timezone', tz),
-          ui.field('Static GTFS zip url', gtfs),
-          ui.field('GTFS-Realtime vehicle positions', rt, 'Optional. Unlocks "LIVE" guesses with real vehicle numbers.'),
-          h('button.btn-primary.btn-block', {
-            onclick: async () => {
-              if (!name.value.trim()) return toast('Name required', 'bad');
-              const { error } = await api.upsertAgency({
-                agency_key: (key.value.trim() || name.value.trim().toLowerCase().replace(/\W+/g, '-')),
-                name: name.value.trim(),
-                timezone: tz.value.trim() || 'UTC',
-                static_gtfs_url: gtfs.value.trim() || null,
-                rt_vehicle_positions_url: rt.value.trim() || null,
-                active: true,
-              });
-              if (error) return toast(error.message, 'bad');
-              toast('Feed saved', 'good');
-              await ctx.reloadAgencies();
-              render();
-            },
-          }, 'Save feed'),
-        ]);
-      })(),
+    const key = ui.textInput({ placeholder: 'my-city' });
+    const name = ui.textInput({ placeholder: 'My City Transit' });
+    const tz = ui.textInput({ placeholder: 'Europe/Zurich' });
+    const gtfs = ui.textInput({ placeholder: 'https://…/google_transit.zip' });
+    const rt = ui.textInput({ placeholder: 'https://…/vehiclepositions.pb (optional)' });
+    host.appendChild(h('div', { style: { marginTop: '18px', display: 'grid', gap: '10px' } }, [
+      h('h3', { style: { margin: 0 } }, 'Add a feed'),
+      h('div.row', [
+        h('div', { style: { flex: 1 } }, ui.field('Key', key)),
+        h('div', { style: { flex: 2 } }, ui.field('Name', name)),
+      ]),
+      ui.field('Timezone', tz, 'Must match the agency timezone inside the feed.'),
+      ui.field('Static GTFS zip url', gtfs),
+      ui.field('GTFS-Realtime vehicle positions', rt, 'Optional. Unlocks "LIVE" guesses with real vehicle numbers.'),
+      h('button.btn-primary.btn-block', {
+        onclick: async () => {
+          if (!name.value.trim()) return toast('Name required', 'bad');
+          const { error } = await api.upsertAgency({
+            agency_key: key.value.trim() || name.value.trim().toLowerCase().replace(/\W+/g, '-'),
+            name: name.value.trim(),
+            timezone: tz.value.trim() || 'UTC',
+            static_gtfs_url: gtfs.value.trim() || null,
+            rt_vehicle_positions_url: rt.value.trim() || null,
+            active: true,
+          });
+          if (error) return toast(error.message, 'bad');
+          toast('Feed saved', 'good');
+          await ctx.reloadAgencies();
+          render();
+        },
+      }, 'Save feed'),
     ]));
   }
 
@@ -350,31 +264,41 @@ export function renderManage(ctx) {
       ui.kv('Supabase url', h('span.mono.tiny', esc(store.client?.url || '–'))),
       ui.kv('Signed in as', esc(store.profile?.username || '–')),
       ui.kv('Role', esc(ROLE_META[store.role]?.label || store.role)),
-      ui.kv('Tracking config', store.game?.tracking_config
-        ? `${store.game.tracking_config.sample_seconds ?? 20}s / ${store.game.tracking_config.min_distance_m ?? 15}m`
-        : 'default (20s / 15m)'),
-      ui.kv('Local queue', `${store.__trackerQueued ?? 0} points waiting`),
+      ui.kv('Connection', config.bakedIn ? 'built in at deploy time' : 'entered in this browser'),
     ]));
 
     host.appendChild(h('button.btn-ghost.btn-block', {
-      onclick: () => { location.hash = '#/info'; },
-    }, 'Connection details & data export'));
+      onclick: async () => {
+        const { clearStopCache } = await import('../overpass.js');
+        const n = await clearStopCache();
+        toast(`Cleared ${n} cached stop lookups`, 'good');
+      },
+    }, 'Clear cached OpenStreetMap stops'));
+
+    host.appendChild(h('button.btn-ghost.btn-block', {
+      style: { marginTop: '10px' },
+      onclick: async () => {
+        const { idb } = await import('../idb.js');
+        await idb.clear('gtfs');
+        toast('Transit feeds will download again on next use', 'good');
+      },
+    }, 'Clear cached transit feeds'));
 
     host.appendChild(h('button.btn-danger.btn-block', {
-      style: { marginTop: '12px' },
+      style: { marginTop: '10px' },
       onclick: async () => {
-        const ok = await confirmDialog('Sign out of everything?',
-          'This clears the saved Supabase connection from this browser as well as the session.', 'Sign out and reset', 'danger');
+        const ok = await confirmDialog('Sign out and reset connection?',
+          'Clears the saved Supabase connection from this browser as well as the session.', 'Sign out and reset', 'danger');
         if (!ok) return;
         await store.signOut();
-        const cfg = (await import('../config.js')).default;
-        cfg.reset();
+        config.reset();
         location.reload();
       },
     }, 'Sign out and reset connection'));
   }
 
-  // fire and forget: the card fills itself in as the queries resolve
   render();
   return wrap;
 }
+
+export default renderManage;

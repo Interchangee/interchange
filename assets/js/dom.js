@@ -192,3 +192,122 @@ export function download(filename, text, type = 'application/json') {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
+
+/* ------------------------------------------------------------------ forms */
+
+/**
+ * Build a small form and read it back by name.
+ *
+ *   const f = createForm([
+ *     { name: 'name', label: 'Name', placeholder: 'Saturday Sprint' },
+ *     { name: 'game', label: 'Game', type: 'select', options: [...], value: id },
+ *   ]);
+ *   host.append(f.el);
+ *   const v = f.values();   // { name: '...', game: '...' }
+ *   f.setError('name', 'required');
+ *
+ * Field spec: { name, label, type, value, placeholder, hint, options, min, max,
+ *               rows, required, onChange }
+ * type: text (default) | password | number | date | select | textarea
+ */
+export function createForm(fields, { submitLabel = null, onSubmit = null, submitKind = 'primary' } = {}) {
+  const el = h('div', { style: { display: 'grid', gap: '10px' } });
+  const controls = new Map();
+  const errorSlots = new Map();
+
+  for (const f of fields) {
+    let input;
+    if (f.type === 'select') {
+      const sel = h('select', { name: f.name });
+      (f.options || []).forEach((o) => {
+        const opt = h('option', { value: o.value }, o.label);
+        if (o.disabled) opt.disabled = true;
+        sel.appendChild(opt);
+      });
+      if (f.value !== undefined && f.value !== null) sel.value = String(f.value);
+      input = h('div.select-wrap', sel);
+      controls.set(f.name, sel);
+    } else if (f.type === 'textarea') {
+      input = h('textarea', { name: f.name, rows: f.rows || 3, placeholder: f.placeholder || '' });
+      controls.set(f.name, input);
+    } else {
+      input = h('input', {
+        type: f.type || 'text',
+        name: f.name,
+        placeholder: f.placeholder || '',
+        autocomplete: f.autocomplete || 'off',
+        autocapitalize: f.autocapitalize || 'off',
+        min: f.min, max: f.max, step: f.step,
+      });
+      if (f.value !== undefined && f.value !== null) input.value = String(f.value);
+      controls.set(f.name, input);
+    }
+    if (f.onChange) controls.get(f.name).addEventListener('change', f.onChange);
+
+    const err = h('div.tiny', { style: { color: 'var(--bad)', minHeight: '0' } });
+    errorSlots.set(f.name, err);
+    el.appendChild(h('label.field', { style: { marginBottom: '0' } }, [
+      h('span', f.label),
+      input,
+      f.hint ? h('div.tiny.muted', { style: { marginTop: '6px' } }, f.hint) : null,
+      err,
+    ]));
+    if (f.hidden) el.lastChild.classList.add('hidden');
+  }
+
+  const button = submitLabel
+    ? h(`button.btn-${submitKind}.btn-block`, { type: 'button' }, submitLabel)
+    : null;
+  if (button) el.appendChild(button);
+
+  const api = {
+    el,
+    controls,
+    get: (name) => controls.get(name)?.value ?? '',
+    reset() {
+      for (const [, c] of controls) { if ('value' in c) c.value = ''; }
+      api.clearErrors();
+    },
+    values() {
+      const out = {};
+      for (const [name, c] of controls) {
+        out[name] = c.type === 'number' ? (c.value === '' ? null : Number(c.value)) : c.value.trim();
+      }
+      return out;
+    },
+    clearErrors() { errorSlots.forEach((e) => { e.textContent = ''; }); },
+    setError(name, message) {
+      const slot = errorSlots.get(name);
+      if (slot) slot.textContent = message || '';
+    },
+    /** Returns true when every field passes its `required` check. */
+    validate() {
+      api.clearErrors();
+      let ok = true;
+      for (const f of fields) {
+        if (!f.required) continue;
+        const value = api.get(f.name);
+        if (value === '' || value === null || value === undefined) {
+          api.setError(f.name, `${f.label} is required`);
+          ok = false;
+        }
+      }
+      return ok;
+    },
+    busy(on, label) {
+      if (!button) return;
+      button.disabled = Boolean(on);
+      if (label) button.textContent = on ? label : submitLabel;
+    },
+  };
+
+  if (button && onSubmit) {
+    button.addEventListener('click', async () => {
+      if (!api.validate()) return;
+      api.busy(true, 'Working…');
+      try { await onSubmit(api); }
+      finally { api.busy(false); }
+    });
+  }
+  return api;
+}
