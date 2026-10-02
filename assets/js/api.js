@@ -35,18 +35,41 @@ export async function loadMyProfile() {
   return { data, error: null };
 }
 
-/** Turn a plain username into the synthetic auth email, then sign in. */
-export async function signIn(username, password) {
+/**
+ * Sign in with a username OR a full email address.
+ *
+ * Usernames are the normal path: `email_for_username` maps the username to the
+ * generated address. But Supabase Auth always needs an email, and a user made
+ * by hand in the dashboard (the very first admin, typically) has no
+ * auth_accounts row - so an address is accepted directly as an escape hatch.
+ */
+export async function signIn(identifier, password) {
   const sb = store.client;
   if (!sb) return fail({ message: 'Supabase is not configured yet' }, 'signin');
-  const uname = String(username || '').trim();
-  const { data: email, error } = await sb.rpc('email_for_username', { uname });
-  if (error) return fail(error, 'signin-lookup');
-  const resolved = typeof email === 'string' ? email : (Array.isArray(email) ? email[0] : null);
-  if (!resolved) return fail({ message: 'Unknown username. Ask your gamemaster to create an account for you.' }, 'signin-lookup');
-  const res = await sb.signInWithPassword({ email: resolved, password });
+
+  const value = String(identifier || '').trim();
+  let email = null;
+
+  if (value.includes('@')) {
+    email = value;
+  } else {
+    const { data, error } = await sb.rpc('email_for_username', { uname: value });
+    if (error) return fail(error, 'signin-lookup');
+    email = typeof data === 'string' ? data : (Array.isArray(data) ? data[0] : null);
+    if (!email) {
+      return fail({
+        message: `No account called "${value}". Check the spelling - or, if this account was `
+          + 'created directly in Supabase, sign in with its full email address instead. '
+          + 'Staff can create usernames from the Create tab.',
+      }, 'signin-lookup');
+    }
+  }
+
+  const res = await sb.signInWithPassword({ email, password });
   if (res.error) {
-    const msg = /invalid/i.test(res.error.message || '') ? 'Wrong password.' : res.error.message;
+    const msg = /invalid/i.test(res.error.message || '')
+      ? 'Wrong password for that account.'
+      : res.error.message;
     return fail({ message: msg }, 'signin');
   }
   return { data: res.data, error: null };

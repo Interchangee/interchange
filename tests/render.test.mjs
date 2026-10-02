@@ -291,7 +291,7 @@ const fakeClient = {
 
 const store = (await import(mod('store.js'))).default;
 store.client;            // ensures the getter path runs
-Object.defineProperty(store, 'client', { get: () => fakeClient });
+Object.defineProperty(store, 'client', { configurable: true, get: () => fakeClient });
 store.setProfile(PROFILE);
 store.setGames([GAME]);
 store.setGame(GAME);
@@ -424,6 +424,74 @@ for (const [name, fn] of Object.entries(screens)) {
 console.log('\nfirst-run bootstrap');
 
 const api = await import(mod('api.js'));
+
+/* Sign-in resolves a username -> generated email, but a user created by hand in
+   the Supabase dashboard has no auth_accounts row, so a literal email address
+   must be accepted directly. Driven through the real REST client with fetch
+   stubbed, which is the code path that actually runs in a browser. */
+const { createClient } = await import(mod('supabase-lite.js'));
+const realStoreClient = store.client;
+const calls = [];
+let rpcEmail = 'u_admin@players.interchange.local';
+
+function stubFetch(url, opts) {
+  calls.push({ url: String(url), body: opts?.body ? JSON.parse(opts.body) : null });
+  const json = (obj, status = 200) => ({
+    ok: status < 400,
+    status,
+    headers: { get: () => null },
+    text: async () => JSON.stringify(obj),
+  });
+  if (String(url).includes('/rpc/email_for_username')) return Promise.resolve(json(rpcEmail));
+  if (String(url).includes('/auth/v1/token')) {
+    return Promise.resolve(json({
+      access_token: 'h.p.s', refresh_token: 'r.1',
+      user: { id: PROFILE.id, email: rpcEmail },
+    }));
+  }
+  return Promise.resolve(json({ message: 'unexpected url' }, 404));
+}
+
+// swap the stub client for a real one whose network is stubbed, so signIn()
+// exercises the actual request building
+const realFetch = globalThis.fetch;
+globalThis.fetch = (url, opts) => stubFetch(url, opts);
+Object.defineProperty(store, 'client', {
+  configurable: true,
+  get: () => createClient('https://demo.supabase.co', 'publishable-key'),
+});
+
+await check('unknown username explains both ways to sign in', async () => {
+  rpcEmail = null;
+  calls.length = 0;
+  const res = await api.signIn('does-not-exist', 'pw');
+  assert.ok(res.error, 'expected an error');
+  assert.match(res.error.message, /No account called/);
+  assert.match(res.error.message, /full email address/);
+});
+
+await check('a username is resolved through email_for_username', async () => {
+  rpcEmail = 'u_gm@players.interchange.local';
+  calls.length = 0;
+  const res = await api.signIn('u_gm', 'pw');
+  assert.equal(res.error, null, res.error?.message);
+  assert.ok(calls.some((c) => c.url.includes('/rpc/email_for_username')), 'should call the lookup');
+  const token = calls.find((c) => c.url.includes('/auth/v1/token'));
+  assert.equal(token.body.email, 'u_gm@players.interchange.local');
+});
+
+await check('a full email address skips the lookup and signs in directly', async () => {
+  calls.length = 0;
+  const res = await api.signIn('u_admin@players.interchange.local', 'pw');
+  assert.equal(res.error, null, res.error?.message);
+  assert.ok(!calls.some((c) => c.url.includes('/rpc/email_for_username')), 'must not do a username lookup');
+  const token = calls.find((c) => c.url.includes('/auth/v1/token'));
+  assert.equal(token.body.email, 'u_admin@players.interchange.local');
+});
+
+// restore the stub client + real fetch for the remaining checks
+globalThis.fetch = realFetch;
+Object.defineProperty(store, 'client', { configurable: true, get: () => realStoreClient });
 
 await check('adminExists() reports whether the project has an admin', async () => {
   const res = await api.adminExists();

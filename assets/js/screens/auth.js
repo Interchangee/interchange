@@ -66,7 +66,11 @@ export function renderSetup(onDone) {
 /* ---------------------------------------------------------------- login --- */
 
 export function renderLogin() {
-  const username = ui.textInput({ placeholder: 'your username', autocomplete: 'username', autocapitalize: 'off' });
+  const username = ui.textInput({
+    placeholder: 'username (or the full email address)',
+    autocomplete: 'username',
+    autocapitalize: 'off',
+  });
   const password = h('input', { type: 'password', placeholder: 'your password', autocomplete: 'current-password' });
   const err = h('div.small', { style: { color: '#b3261e', minHeight: '18px', margin: '4px 0 8px' } });
 
@@ -120,7 +124,7 @@ export function renderLogin() {
       h('div', { style: { background: 'var(--orange)', borderRadius: '14px', padding: '10px', display: 'flex' } }, icon('route', { size: 30, fill: '#fff' })),
       h('div', [h('h1', 'Interchange'), h('div.small.muted', 'Ride transit. Get points.')]),
     ]),
-    ui.field('Username', username),
+    ui.field('Username', username, 'Accounts made in the Supabase dashboard have no username yet — sign in with their full email address.'),
     ui.field('Password', password),
     err,
     submit,
