@@ -68,6 +68,8 @@ async function main() {
   console.log(hasConfig
     ? '  config.local.js: included (Supabase connection is baked in)'
     : '  config.local.js: absent (the app will show its "Connect to Supabase" screen)');
+
+  return copied;
 }
 
-await main();
+export const packed = await main();

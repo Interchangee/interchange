@@ -17,7 +17,6 @@
 import { readFile, writeFile, access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
-import { spawn } from 'node:child_process';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -81,17 +80,21 @@ export default {
   console.log(`  wrote assets/js/config.local.js for project ${new URL(url).hostname}`);
 }
 
-/** Run the packaging step in-process so `npm run build` is the whole pipeline. */
-function pack() {
-  return new Promise((done) => {
-    const child = spawn(process.execPath, [join(root, 'tools/pack.mjs')], { stdio: 'inherit' });
-    child.on('close', (code) => done(code ?? 0));
-  });
+/**
+ * Run the packaging step in-process so `npm run build` is the whole pipeline.
+ * Imported dynamically rather than spawned: a child process would need its
+ * stdio drained before exit, and calling process.exit() while it is still
+ * writing silently produces an empty public/ - which is exactly the failure
+ * Vercel reports as "No Output Directory named public found".
+ */
+async function pack() {
+  const mod = await import('./pack.mjs');
+  return mod.packed ?? 0;
 }
 
 console.log('build:');
 await loadDotEnv();
 await writeConfig();
 console.log('pack:');
-const code = await pack();
-process.exit(code);
+const entries = await pack();
+console.log(`done - public/ contains ${entries} entries`);
