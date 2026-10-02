@@ -1,15 +1,29 @@
-# Files Vercel does not need to upload or build.
-# The `public/` output is produced by `npm run build` on their side.
+# What Vercel should NOT upload to its build environment.
+#
+# Careful: the build command is `npm run build`, which runs
+# `node tools/build.mjs`. Everything the build needs must stay uploaded, so
+# tools/ is deliberately NOT listed here - ignoring it fails the build with
+# "Cannot find module '/vercel/path0/tools/build.mjs'".
+#
+# Comments sit on their own lines so no parser reads them as a pattern.
 
+# node smoke tests: run locally, never during a deploy
 tests/
-tools/
+
+# host and VCS internals
 .git/
 .github/
 .vercel/
 node_modules/
+
+# regenerated during the build
 public/
+
+# documentation and leftovers
 *.md
 *.bundle
+
+# real values live in Vercel's environment variables; .env.example documents them
 .env
 .env.*
 !.env.example
