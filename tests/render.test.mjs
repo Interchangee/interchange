@@ -487,6 +487,45 @@ await check('sign-up is disabled in the Supabase project config', async () => {
   assert.ok(/verify_jwt = true/.test(cfg));
 });
 
+console.log('\ndeploy config');
+
+await check('Vercel config points at the packed output', async () => {
+  const cfg = JSON.parse(await readFile(join(here, '..', 'vercel.json'), 'utf8'));
+  assert.equal(cfg.outputDirectory, 'public');
+  assert.match(cfg.buildCommand, /npm run build/);
+  // asset caching must stay short: filenames carry no content hash
+  const rules = JSON.stringify(cfg.headers || []);
+  assert.ok(!/max-age=604800|max-age=[1-9]\d{5,}/.test(rules), 'a long cache would pin clients to stale assets');
+});
+
+await check('.vercelignore never excludes what the build needs', async () => {
+  const ig = await readFile(join(here, '..', '.vercelignore'), 'utf8');
+  const patterns = ig.split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'));
+
+  // Vercel runs `npm run build` -> `node tools/build.mjs` inside the upload,
+  // so excluding tools/ breaks the deploy with MODULE_NOT_FOUND.
+  for (const needed of ['tools', 'assets', 'supabase']) {
+    assert.ok(
+      !patterns.some((p) => p.replace(/^\//, '').replace(/\/$/, '') === needed),
+      `.vercelignore must not exclude ${needed}/ - the build needs it`,
+    );
+  }
+  assert.ok(patterns.includes('.env'), '.env must stay excluded from uploads');
+  assert.ok(patterns.some((p) => p.includes('.env.example')), '.env.example should be documented');
+});
+
+await check('build script and packer exist where the build command looks', async () => {
+  for (const f of ['tools/build.mjs', 'tools/pack.mjs']) {
+    const src = await readFile(join(here, '..', f), 'utf8');
+    assert.ok(src.length > 100, `${f} looks empty`);
+  }
+  const pkg = JSON.parse(await readFile(join(here, '..', 'package.json'), 'utf8'));
+  assert.match(pkg.scripts.build, /tools\/build\.mjs/);
+  assert.ok(!pkg.engines, 'an open-ended engines range triggers Vercel Node auto-upgrade warnings');
+});
+
 console.log('\npermissions');
 
 const authz = await import(mod('authz.js'));
