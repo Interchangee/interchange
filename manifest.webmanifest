@@ -1,0 +1,39 @@
+{
+  "name": "Interchange",
+  "short_name": "Interchange",
+  "description": "An in-real-life transit game: GPS tracking, automatic stop matching from OpenStreetMap and free GTFS feeds, plus flexible points.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5822a",
+  "theme_color": "#f5822a",
+  "categories": ["games", "travel", "navigation"],
+  "lang": "en",
+  "icons": [
+    {
+      "src": "assets/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

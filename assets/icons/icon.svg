@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Interchange">
+  <rect width="512" height="512" rx="112" fill="#f5822a"/>
+  <!-- two routes crossing over: the interchange -->
+  <g fill="none" stroke="#ffffff" stroke-width="52" stroke-linecap="round">
+    <path d="M118 404 C 205 330, 305 178, 394 104" opacity="0.55"/>
+    <path d="M118 108 C 205 182, 305 334, 394 408"/>
+  </g>
+  <!-- the station node at the crossing -->
+  <circle cx="256" cy="256" r="72" fill="#12496b"/>
+  <circle cx="256" cy="256" r="30" fill="#ffffff"/>
+</svg>

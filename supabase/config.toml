@@ -1,0 +1,56 @@
+# ============================================================================
+#  Supabase project config for Interchange
+#
+#  This file is what the Supabase GitHub integration and the Supabase CLI read.
+#  The repository layout is the standard one, so both work with no extra setup:
+#
+#     supabase/migrations/*.sql        applied on push to the linked branch
+#     supabase/functions/<name>/       deployed on push to the linked branch
+#
+#  CLI usage (optional - the GitHub integration does this for you):
+#     supabase link --project-ref <your-ref>
+#     supabase db push
+#     supabase functions deploy create-user
+# ============================================================================
+
+project_id = "interchange"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+# Self-service sign-up is OFF on purpose: accounts only ever come from an
+# admin, manager or gamemaster through the create-user edge function.
+enable_signup = false
+# Usernames are stored in public.auth_accounts; GoTrue only ever sees the
+# generated u_<username>@players.interchange.local address.
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = false
+
+[functions.create-user]
+# The function authenticates the caller itself and then uses the service role,
+# so the platform JWT check stays on.
+enabled = true
+verify_jwt = true
+
+[analytics]
+enabled = false

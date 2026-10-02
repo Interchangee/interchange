@@ -1,0 +1,15 @@
+# Files Vercel does not need to upload or build.
+# The `public/` output is produced by `npm run build` on their side.
+
+tests/
+tools/
+.git/
+.github/
+.vercel/
+node_modules/
+public/
+*.md
+*.bundle
+.env
+.env.*
+!.env.example

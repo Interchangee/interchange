@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Interchange</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="An in-real-life transit game: GPS tracking, live stop matching and points for riding buses, trains, trams and ferries.">
+<meta name="theme-color" content="#f5822a">
+<meta name="color-scheme" content="light">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Interchange">
+<meta name="referrer" content="no-referrer">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body>
+  <!-- pre-paint splash so install/launch feels instant -->
+  <div id="boot" style="position:fixed;inset:0;background:#f5822a;display:flex;align-items:center;justify-content:center;color:#fff;font:600 20px Roboto,'Segoe UI',system-ui,sans-serif;z-index:200">
+    Interchange
+  </div>
+
+  <main class="app" id="app" hidden>
+    <section class="screen active" id="screen-home"></section>
+    <section class="screen" id="screen-create"></section>
+    <section class="screen" id="screen-teams"></section>
+    <section class="screen" id="screen-game"></section>
+    <section class="screen" id="screen-info"></section>
+  </main>
+
+  <div id="boot-overlay"></div>
+  <div id="toast-host"></div>
+
+  <script type="module" src="assets/js/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js').catch(function (e) { console.warn('SW failed', e); });
+      });
+    }
+  </script>
+</body>
+</html>

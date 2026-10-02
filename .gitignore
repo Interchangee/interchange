@@ -1,0 +1,33 @@
+# local / editor noise
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# node (the app itself has zero runtime dependencies)
+node_modules/
+package-lock.json
+
+# supabase CLI local state
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+
+# never commit real keys or generated config
+.env
+.env.*
+!.env.example
+assets/js/config.local.js
+
+# build output + host local state
+public/
+.vercel/
+
+# test scratch
+tests/_*.mjs
+*.zip
+
+# local git history backups (bundles of repos that were cleaned up)
+git-backup-*/
+*.bundle

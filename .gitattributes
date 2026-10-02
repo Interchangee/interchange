@@ -1,0 +1,8 @@
+# Keep source files LF so the app behaves identically whatever machine edits
+# it (the service worker and ES modules are served verbatim, no build step).
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.zip binary
+*.woff2 binary
