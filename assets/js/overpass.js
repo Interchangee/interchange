@@ -1,14 +1,54 @@
 /* ==========================================================================
-   Overpass API client - completely free, no key.
+   Overpass API client - free, no key.
    Used for one thing: "which transit stops are within N metres of me?"
    That is the geography layer; schedules come from GTFS.
+
+   Being a good citizen matters here, because these are donated servers. The
+   FOSSGIS operator (overpass-api.de) asks for two things that shape this file:
+
+     - "Make sure you rate-limit" and never ignore a 429: "If you get a 429,
+       wait at least 30s before sending the next query." Clients that retry
+       quickly get automatically banned by IP.
+     - Cache aggressively. Stop positions are valid for days, and the operator
+       says "there's no reason to refresh results more than once per minute".
+
+   So: results are cached per coordinate cell for a week, every endpoint is
+   skipped while it is in cooldown, and a 429/406 never triggers an immediate
+   retry on any other endpoint either. Only one request happens per lookup.
    ========================================================================== */
 
-const ENDPOINTS = [
+import idb from './idb.js';
+import { haversine } from './geo.js';
+
+/**
+ * Free, keyless, global-coverage instances only.
+ * Verified 2026-10-02 against the wiki's public instance table:
+ *   - overpass.kumi.systems is gone (renamed to private.coffee in 2024 and
+ *     times out), so it is deliberately not listed.
+ *   - private.coffee did not answer any request that day, so it is left out
+ *     until it proves reliable again.
+ * The paid/keyed and regional-only instances (Switzerland, Virginia, Ethiopia,
+ * Britain) are no good for a mobile app that can run anywhere.
+ */
+export const ENDPOINTS = [
+  // FOSSGIS, the official instance for light use: the only one with a written
+  // fair-use policy. Drop it first in the list but expect 504s when it is busy.
   'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.private.coffee/api/interpreter',
+  // VK Maps. Stated policy: "no requests limitations"; answered every probe.
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  // Global data, answered every probe. No longer on the official wiki list and
+  // its published policy is stale, so it is last.
+  'https://overpass.openstreetmap.fr/api/interpreter',
 ];
+
+/** Per-endpoint cooldown, in ms since epoch. A 429/406 parks an endpoint. */
+const cooldownUntil = new Map();
+
+const COOLDOWN_AFTER_429_MS = 30_000;   // operator's stated minimum
+const COOLDOWN_AFTER_406_MS = 60 * 60_000; // UA/Referer ban: an hour, then try again
+const COOLDOWN_AFTER_5XX_MS = 20_000;   // 504 = "server too busy"
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const CACHE_PREFIX = 'osm-stops:';
 
 const STOP_FILTER = [
   'node["highway"="bus_stop"]',
@@ -24,10 +64,22 @@ const STOP_FILTER = [
   'node["aerialway"="station"]',
 ];
 
-function buildQuery(lat, lon, radius) {
+export function buildQuery(lat, lon, radius) {
   const around = `(around:${Math.round(radius)},${lat.toFixed(6)},${lon.toFixed(6)})`;
   const body = STOP_FILTER.map((f) => `  ${f}${around};`).join('\n');
   return `[out:json][timeout:25];\n(\n${body}\n);\nout body center;`;
+}
+
+/**
+ * Cache key on a ~500 m grid. Two lookups from the same street hit the same
+ * key, which is what keeps the daily request count far below the "regular use"
+ * threshold the operator documents (<100/day for a whole application).
+ */
+export function cellKey(lat, lon, radius = 350) {
+  const size = Math.max(0.002, (radius * 1.2) / 111_320);   // degrees
+  const latCell = Math.round(lat / size);
+  const lonCell = Math.round(lon / size);
+  return `${CACHE_PREFIX}${latCell}:${lonCell}:${Math.round(radius)}`;
 }
 
 function parseElements(json) {
@@ -55,7 +107,7 @@ function parseElements(json) {
   return stops;
 }
 
-function detectModes(tags, el) {
+function detectModes(tags) {
   const modes = new Set();
   if (tags.highway === 'bus_stop') modes.add('bus');
   if (tags.railway === 'tram_stop') modes.add('tram');
@@ -74,15 +126,66 @@ function detectModes(tags, el) {
   return Array.from(modes);
 }
 
+/** Endpoints currently not parked, soonest-to-recover first. */
+function availableEndpoints(now = Date.now()) {
+  return ENDPOINTS
+    .map((url) => ({ url, ready: cooldownUntil.get(url) || 0 }))
+    .filter((e) => e.ready <= now)
+    .sort((a, b) => a.ready - b.ready)
+    .map((e) => e.url);
+}
+
+function park(url, ms) {
+  cooldownUntil.set(url, Date.now() + ms);
+}
+
+/** How long until any endpoint is usable again, in ms (0 = right now). */
+export function cooldownRemaining() {
+  const now = Date.now();
+  if (availableEndpoints(now).length) return 0;
+  return Math.min(...ENDPOINTS.map((u) => (cooldownUntil.get(u) || 0) - now));
+}
+
+function retryAfterMs(res, fallback) {
+  const header = res.headers?.get?.('Retry-After');
+  const secs = Number(header);
+  if (Number.isFinite(secs) && secs > 0) return Math.min(secs * 1000, 10 * 60_000);
+  return fallback;
+}
+
+async function readCached(key) {
+  try {
+    const row = await idb.get(key);
+    if (row && Date.now() - (row.at || 0) < CACHE_TTL_MS) return row.stops;
+  } catch {}
+  return null;
+}
+
 /**
  * Find transit stops near a coordinate.
- * @returns {Promise<{stops:Array, source:string, error?:string}>}
+ *
+ * @returns {Promise<{stops:Array, source:string|null, query:string, error?:string,
+ *                    cached?:boolean, cooldownMs?:number}>}
  */
-export async function findNearbyStops(lat, lon, { radius = 350, signal } = {}) {
+export async function findNearbyStops(lat, lon, { radius = 350, signal, force = false } = {}) {
   const query = buildQuery(lat, lon, radius);
-  let lastErr = null;
+  const key = cellKey(lat, lon, radius);
 
-  for (const endpoint of ENDPOINTS) {
+  if (!force) {
+    const cached = await readCached(key);
+    if (cached) return { stops: cached, source: 'cache', query, cached: true };
+  }
+
+  const pending = cooldownRemaining();
+  if (pending > 0) {
+    return {
+      stops: [], source: null, query, cooldownMs: pending,
+      error: `OpenStreetMap is not answering right now (cooling down for another ${Math.ceil(pending / 1000)} s).`,
+    };
+  }
+
+  let lastErr = null;
+  for (const endpoint of availableEndpoints()) {
     const ctrl = new AbortController();
     const onAbort = () => ctrl.abort();
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -96,12 +199,32 @@ export async function findNearbyStops(lat, lon, { radius = 350, signal } = {}) {
       });
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
-      if (!res.ok) { lastErr = new Error(`Overpass HTTP ${res.status}`); continue; }
+
+      if (res.status === 429) {
+        // rate limited: back off, and do NOT try the next mirror immediately -
+        // the quota is documented as counting a whole application, not one host
+        park(endpoint, retryAfterMs(res, COOLDOWN_AFTER_429_MS));
+        return { stops: [], source: null, query, cooldownMs: COOLDOWN_AFTER_429_MS, error: 'OpenStreetMap rate limit reached. Try again in about a minute.' };
+      }
+      if (res.status === 406) {
+        // User-Agent/Referer ban: stop using this instance for a while
+        park(endpoint, COOLDOWN_AFTER_406_MS);
+        lastErr = new Error('Overpass refused this client (406)');
+        continue;
+      }
+      if (!res.ok) {
+        if (res.status >= 500) park(endpoint, COOLDOWN_AFTER_5XX_MS);
+        lastErr = new Error(`Overpass HTTP ${res.status}`);
+        continue;
+      }
+
       const text = await res.text();
       let json;
       try { json = JSON.parse(text); }
       catch { json = parseOverpassXml(text); }
-      return { stops: parseElements(json), source: endpoint, query };
+      const stops = parseElements(json);
+      idb.set(key, { at: Date.now(), stops, source: endpoint }).catch(() => {});
+      return { stops, source: endpoint, query };
     } catch (err) {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
@@ -109,6 +232,19 @@ export async function findNearbyStops(lat, lon, { radius = 350, signal } = {}) {
     }
   }
   return { stops: [], source: null, query, error: lastErr?.message || 'Overpass unavailable' };
+}
+
+/** Forget cached stop lookups, e.g. from the Info screen. Returns how many. */
+export async function clearStopCache() {
+  try {
+    // the kv store keeps the key out of the stored value, so read the keys
+    const keys = await idb.getAllKeys();
+    const mine = (keys || []).filter((k) => typeof k === 'string' && k.startsWith(CACHE_PREFIX));
+    await Promise.all(mine.map((k) => idb.del(k)));
+    return mine.length;
+  } catch {
+    return 0;
+  }
 }
 
 /** Minimal Overpass-XML fallback (in case a mirror ignores the JSON accept). */
@@ -141,5 +277,16 @@ export function toMatcherStops(osmStops) {
   }));
 }
 
-export const overpass = { findNearbyStops, toMatcherStops, ENDPOINTS };
+/** Nearest stop in a stop list, handy for tests and for the exit flow. */
+export function nearestStop(stops, point) {
+  let best = null;
+  let bestD = Infinity;
+  for (const s of stops || []) {
+    const d = haversine(point, s);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  return best ? { stop: best, distance: bestD } : null;
+}
+
+export const overpass = { findNearbyStops, toMatcherStops, cellKey, clearStopCache, ENDPOINTS };
 export default overpass;

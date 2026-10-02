@@ -15,6 +15,7 @@ const mod = (p) => pathToFileURL(join(here, '..', 'assets', 'js', p)).href;
 const geo = await import(mod('geo.js'));
 const zip = await import(mod('zip.js'));
 const gtfs = await import(mod('gtfs.js'));
+const overpass = await import(mod('overpass.js'));
 
 let passed = 0;
 function test(name, fn) {
@@ -233,6 +234,63 @@ testAsync('activeServiceIds falls back to weekdays', async () => {
   const bundle = await testBundle();
   const sunday = gtfs.activeServiceIds(bundle, new Date('2024-05-12T12:00:00Z'), 'Europe/Berlin');
   assert.equal(sunday.length, 0, 'no Sunday service in this feed');
+});
+
+console.log('\noverpass client');
+
+test('only live, global, keyless instances are used', () => {
+  const list = overpass.ENDPOINTS;
+  assert.ok(list.length >= 2, 'need at least one fallback instance');
+  for (const url of list) {
+    assert.match(url, /^https:\/\//, `${url} must be https`);
+    // an API key placeholder would mean the instance is not free
+    assert.ok(!/YOUR_API_KEY|API_KEY/i.test(url), `${url} looks like a keyed instance`);
+  }
+  // overpass.kumi.systems was renamed to private.coffee in 2024 and times out;
+  // private.coffee answered nothing when probed, so neither may be relied on
+  const joined = list.join(' ');
+  assert.ok(!/kumi\.systems/.test(joined), 'kumi.systems is dead and must not be listed');
+  assert.ok(!/private\.coffee/.test(joined), 'private.coffee was unresponsive and must not be listed');
+  // regional-only instances would return nothing useful for a global app
+  for (const regional of ['overpass.osm.ch', 'overpass.maprva.org', 'openplaceguide.org', 'atownsend.org.uk']) {
+    assert.ok(!joined.includes(regional), `${regional} only covers one region`);
+  }
+  assert.ok(joined.includes('overpass-api.de'), 'the documented light-use instance should be present');
+});
+
+test('the query stays small: bounded timeout and radius', () => {
+  const q = overpass.buildQuery(52.5, 13.4, 350);
+  assert.match(q, /\[out:json\]\[timeout:25\]/, 'timeout must stay well under the 180 s default');
+  assert.match(q, /around:350,52\.500000,13\.400000/);
+  assert.match(q, /out body center;/);
+  // the operator bans clients that hammer it, so the query must not grow into a
+  // world scrape: a handful of stop tags, nothing else
+  assert.ok(q.split('\n').length < 20, 'query should stay a short list of stop tags');
+});
+
+test('nearby lookups share one cache cell', () => {
+  // two points on the same street must reuse one cached answer, which is what
+  // keeps a whole app inside the documented <100 requests/day band
+  const a = overpass.cellKey(52.52001, 13.40999, 350);
+  const b = overpass.cellKey(52.52008, 13.41003, 350);
+  assert.equal(a, b, 'points ~10 m apart should share a cell');
+  const far = overpass.cellKey(52.61, 13.41, 350);
+  assert.notEqual(a, far, 'a kilometre away should be a different cell');
+  assert.match(a, /^osm-stops:/, 'cache keys must be namespaced so they can be cleared');
+});
+
+test('stop normalisation splits route_ref and keeps the gtfs id', () => {
+  const [s] = overpass.toMatcherStops([{
+    osm_id: 'node/1', name: 'Central', lat: 1, lon: 2,
+    route_ref: '12; M1 ,34', gtfs_stop_id: 'S1', modes: ['bus'],
+  }]);
+  assert.deepEqual(s.route_ref, ['12', 'M1', '34']);
+  assert.equal(s.gtfs_stop_id, 'S1');
+});
+
+test('stops with no name fall back to their ref', () => {
+  const [s] = overpass.toMatcherStops([{ osm_id: 'node/2', lat: 1, lon: 2, ref: 'B7' }]);
+  assert.equal(s.name, 'B7');
 });
 
 console.log(`\n${passed} checks passed${process.exitCode ? ' (with failures)' : ''}\n`);

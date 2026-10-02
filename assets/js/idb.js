@@ -50,6 +50,9 @@ export const idb = {
   async getAll(storeName = 'kv') {
     try { return await tx(storeName, 'readonly', (s) => s.getAll()); } catch { return []; }
   },
+  async getAllKeys(storeName = 'kv') {
+    try { return await tx(storeName, 'readonly', (s) => s.getAllKeys()); } catch { return []; }
+  },
   async clear(storeName = 'kv') {
     try { return await tx(storeName, 'readwrite', (s) => s.clear()); } catch { return undefined; }
   },
