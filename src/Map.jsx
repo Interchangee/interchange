@@ -1,19 +1,3 @@
-/*
- * FILE: src/Map.jsx
- * 
- * FILE TREE:
- * interchange/
- * ├── src/
- * │   ├── supabase.js
- * │   ├── App.jsx
- * │   ├── Game.jsx
- * │   ├── Map.jsx  <-- YOU ARE HERE 
- * │   ├── useGpsTracker.js
- * │   ├── TripStatusBanner.jsx
- * │   ├── AlightPrompt.jsx
- * │   └── Scoreboard.jsx
- */
-
 import { MapContainer, TileLayer, Marker, Popup, CircleMarker } from "react-leaflet";
 import { useEffect, useState } from "react";
 import "leaflet/dist/leaflet.css";
