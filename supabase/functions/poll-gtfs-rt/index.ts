@@ -1,61 +1,65 @@
-/*
- * FILE: supabase/functions/poll-gtfs-rt/index.ts
- * 
- * FILE TREE:
- * interchange/
- * ├── supabase/
- * │   ├── migrations/
- * │   └── functions/
- * │       ├── _shared/
- * │       └── poll-gtfs-rt/
- * │           └── index.ts  <-- YOU ARE HERE
- */
+// Every 30s. Fetch Trip Updates + Service Alerts, upsert state.
+// Env: GTFS_RT_TRIP_UPDATES_URL, GTFS_RT_ALERTS_URL, GTFS_RT_API_KEY (optional)
+import { adminClient } from '../_shared/supabase.ts';
+import G from 'https://esm.sh/gtfs-realtime-bindings@1.1.1';
 
-import { admin } from "../_shared/supabase.ts";
-import GtfsRealtimeBindings from "https://esm.sh/gtfs-realtime-bindings@1.1.1";
-
-const KEY = Deno.env.get("GTFS_API_KEY");
-const TRIP_URL = Deno.env.get("GTFS_RT_TRIP_UPDATES_URL");
+async function fetchFeed(url: string) {
+  const key = Deno.env.get('GTFS_RT_API_KEY');
+  const res = await fetch(url, key ? { headers: { Authorization: key } } : undefined);
+  if (!res.ok) throw new Error(`feed ${url} → ${res.status}`);
+  return G.transit_realtime.FeedMessage.decode(new Uint8Array(await res.arrayBuffer()));
+}
 
 Deno.serve(async () => {
-  const db = admin();
+  const sb = adminClient();
+  const now = new Date().toISOString();
 
-  // Prototype fallback: if no API key is set, simulate a cancelled trip
-  if (!KEY || !TRIP_URL) {
-    console.log("No GTFS keys provided. Simulating live data for prototype...");
-    await db.from("trip_realtime_state").upsert({
-      trip_id: "mock-trip-123",
-      delay_seconds: 180,
-      cancelled: true, // Simulate a cancellation to test UI
-      observed_at: new Date().toISOString(),
+  // Trip Updates
+  const tu = await fetchFeed(Deno.env.get('GTFS_RT_TRIP_UPDATES_URL')!);
+  const tripRows: any[] = [];
+  for (const entity of tu.entity) {
+    const t = entity.tripUpdate;
+    if (!t?.trip?.tripId) continue;
+    const stus = t.stopTimeUpdate ?? [];
+    const next = stus.find(s => (s.arrival?.time ?? s.departure?.time ?? 0) * 1000 > Date.now());
+    tripRows.push({
+      trip_id: t.trip.tripId,
+      delay_seconds: t.delay ?? null,
+      cancelled: t.trip.scheduleRelationship === 3,
+      skipped_stop_ids: stus.filter(s => s.scheduleRelationship === 1).map(s => s.stopId).filter(Boolean),
+      next_stop_id: next?.stopId ?? null,
+      observed_at: now,
     });
-    return new Response(JSON.stringify({ simulated: true }));
+  }
+  if (tripRows.length) {
+    await sb.from('trip_realtime_state').upsert(tripRows, { onConflict: 'trip_id' });
   }
 
-  try {
-    const res = await fetch(TRIP_URL, { headers: { Authorization: `Bearer ${KEY}` } });
-    const buffer = await res.arrayBuffer();
-    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(buffer));
-
-    const rows = feed.entity
-      .filter((e) => e.tripUpdate)
-      .map((e) => {
-        const tu = e.tripUpdate!;
-        return {
-          trip_id: tu.trip.tripId,
-          delay_seconds: tu.delay ?? 0,
-          cancelled: tu.trip.scheduleRelationship === 3, // CANCELED
-          skipped_stop_ids: tu.stopTimeUpdate?.filter((s) => s.scheduleRelationship === 1).map((s) => s.stopId) ?? [],
-          observed_at: new Date().toISOString(),
-        };
-      });
-
-    if (rows.length) {
-      await db.from("trip_realtime_state").upsert(rows, { onConflict: "trip_id" });
-    }
-
-    return new Response(JSON.stringify({ updated: rows.length }));
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+  // Service Alerts
+  const al = await fetchFeed(Deno.env.get('GTFS_RT_ALERTS_URL')!);
+  const alertRows: any[] = [];
+  for (const entity of al.entity) {
+    const a = entity.alert;
+    if (!a?.headerText?.translation?.length) continue;
+    const start = a.activePeriod?.[0]?.start;
+    const end   = a.activePeriod?.[0]?.end;
+    const range = start || end
+      ? `[${start ? new Date(start * 1000).toISOString() : ''},${end ? new Date(end * 1000).toISOString() : ''})`
+      : null;
+    alertRows.push({
+      id: entity.id,
+      route_ids: (a.informedEntity ?? []).map(e => e.routeId).filter(Boolean),
+      stop_ids:  (a.informedEntity ?? []).map(e => e.stopId).filter(Boolean),
+      effect: G.transit_realtime.Alert.Effect[a.effect ?? 0] ?? 'UNKNOWN_EFFECT',
+      header: a.headerText.translation[0].text,
+      description: a.descriptionText?.translation?.[0]?.text ?? null,
+      active_period: range,
+      observed_at: now,
+    });
   }
+  if (alertRows.length) {
+    await sb.from('service_alerts').upsert(alertRows, { onConflict: 'id' });
+  }
+
+  return new Response(JSON.stringify({ trips: tripRows.length, alerts: alertRows.length }));
 });
