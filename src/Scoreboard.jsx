@@ -1,19 +1,3 @@
-/* 
- * FILE: src/Scoreboard.jsx
- * 
- * FILE TREE:
- * interchange/
- * ├── src/
- * │   ├── supabase.js
- * │   ├── App.jsx
- * │   ├── Game.jsx
- * │   ├── Map.jsx
- * │   ├── useGpsTracker.js
- * │   ├── TripStatusBanner.jsx
- * │   ├── AlightPrompt.jsx
- * │   └── Scoreboard.jsx  <-- YOU ARE HERE
- */
-
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 
@@ -21,7 +5,6 @@ export default function Scoreboard({ gameId, playerId }) {
   const [score, setScore] = useState(0);
 
   useEffect(() => {
-    // Fetch initial score
     const fetchScore = async () => {
       const { data } = await supabase
         .from("score_ledger")
@@ -37,7 +20,6 @@ export default function Scoreboard({ gameId, playerId }) {
     
     fetchScore();
 
-    // Subscribe to live score updates via Postgres Changes
     const channel = supabase
       .channel('score_updates')
       .on('postgres_changes', { 
