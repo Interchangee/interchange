@@ -1,49 +1,54 @@
-import { useEffect, useState } from 'react';
-import { supabase } from './supabase';
+import { useEffect, useState } from "react";
+import { supabase } from "./supabase";
 
-export default function Scoreboard({ gameId, mySessionId }) {
-  const [rows, setRows] = useState([]);
+export default function Scoreboard({ gameId, playerId }) {
+  const [score, setScore] = useState(0);
 
   useEffect(() => {
-    if (!gameId) return;
-
-    const load = async () => {
+    const fetchScore = async () => {
       const { data } = await supabase
-        .from('leaderboard')
-        .select('player_session_id, score')
-        .eq('game_id', gameId)
-        .order('score', { ascending: false })
-        .limit(10);
-      setRows(data ?? []);
+        .from("score_ledger")
+        .select("points_delta")
+        .eq("player_id", playerId)
+        .eq("game_id", gameId);
+      
+      if (data) {
+        const total = data.reduce((sum, row) => sum + row.points_delta, 0);
+        setScore(total);
+      }
     };
-    load();
+    
+    fetchScore();
 
-    const ch = supabase
-      .channel(`scoreboard:${gameId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'score_ledger', filter: `game_id=eq.${gameId}` },
-        load
-      )
+    const channel = supabase
+      .channel('score_updates')
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'score_ledger',
+        filter: `player_id=eq.${playerId}`
+      }, (payload) => {
+        setScore((prev) => prev + payload.new.points_delta);
+      })
       .subscribe();
 
-    return () => ch.unsubscribe();
-  }, [gameId]);
+    return () => supabase.removeChannel(channel);
+  }, [gameId, playerId]);
 
   return (
-    <div className="scoreboard">
-      <h3>Leaderboard</h3>
-      <ol>
-        {rows.map((r, i) => (
-          <li
-            key={r.player_session_id}
-            className={r.player_session_id === mySessionId ? 'is-me' : ''}
-          >
-            #{i + 1} — {r.score} pts
-          </li>
-        ))}
-        {rows.length === 0 && <li>No scores yet.</li>}
-      </ol>
+    <div style={{
+      position: "absolute",
+      top: "60px",
+      right: "16px",
+      background: "rgba(255, 255, 255, 0.9)",
+      padding: "12px 20px",
+      borderRadius: "8px",
+      boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+      zIndex: 1000,
+      textAlign: "center"
+    }}>
+      <div style={{ fontSize: "12px", color: "#666", textTransform: "uppercase", letterSpacing: "1px" }}>Score</div>
+      <div style={{ fontSize: "24px", fontWeight: "bold", color: "#1976d2" }}>{score}</div>
     </div>
   );
 }
