@@ -1,5 +1,3 @@
-// Every 30s: cross-check active trip_events vs RT state.
-// On cancellation, infer alight from last GPS within 50m.
 import { adminClient } from '../_shared/supabase.ts';
 
 Deno.serve(async () => {
@@ -23,19 +21,26 @@ Deno.serve(async () => {
     if (!state) continue;
 
     if (state.cancelled) {
-      const { data: inferred } = await sb.rpc('infer_alight_stop', { p_session_id: ev.player_session_id });
+      const { data: inferred } = await sb.rpc('infer_alight_stop', {
+        p_session_id: ev.player_session_id,
+      });
       const stop = inferred?.[0];
-      await sb.from('trip_events').update({
-        cancellation_detected: true,
-        inferred_alight_stop_id: stop?.stop_id ?? null,
-        metadata: { inferred_distance_m: stop?.distance_m ?? null },
-      }).eq('id', ev.id);
+      await sb
+        .from('trip_events')
+        .update({
+          cancellation_detected: true,
+          inferred_alight_stop_id: stop?.stop_id ?? null,
+          metadata: { inferred_distance_m: stop?.distance_m ?? null },
+        })
+        .eq('id', ev.id);
       reconciled++;
     } else {
-      await sb.from('trip_events').update({
-        arrival_delay_seconds: state.delay_seconds ?? 0,
-      }).eq('id', ev.id);
+      await sb
+        .from('trip_events')
+        .update({ arrival_delay_seconds: state.delay_seconds ?? 0 })
+        .eq('id', ev.id);
     }
   }
+
   return new Response(JSON.stringify({ reconciled }));
 });

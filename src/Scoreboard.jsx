@@ -6,8 +6,10 @@ export default function Scoreboard({ gameId, mySessionId }) {
 
   useEffect(() => {
     if (!gameId) return;
+
     const load = async () => {
-      const { data } = await supabase.from('leaderboard')
+      const { data } = await supabase
+        .from('leaderboard')
         .select('player_session_id, score')
         .eq('game_id', gameId)
         .order('score', { ascending: false })
@@ -15,11 +17,16 @@ export default function Scoreboard({ gameId, mySessionId }) {
       setRows(data ?? []);
     };
     load();
-    const ch = supabase.channel(`scoreboard:${gameId}`)
-      .on('postgres_changes',
+
+    const ch = supabase
+      .channel(`scoreboard:${gameId}`)
+      .on(
+        'postgres_changes',
         { event: '*', schema: 'public', table: 'score_ledger', filter: `game_id=eq.${gameId}` },
-        load)
+        load
+      )
       .subscribe();
+
     return () => ch.unsubscribe();
   }, [gameId]);
 
@@ -28,8 +35,10 @@ export default function Scoreboard({ gameId, mySessionId }) {
       <h3>Leaderboard</h3>
       <ol>
         {rows.map((r, i) => (
-          <li key={r.player_session_id}
-              className={r.player_session_id === mySessionId ? 'is-me' : ''}>
+          <li
+            key={r.player_session_id}
+            className={r.player_session_id === mySessionId ? 'is-me' : ''}
+          >
             #{i + 1} — {r.score} pts
           </li>
         ))}

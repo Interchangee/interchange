@@ -6,6 +6,5 @@ Deno.serve(async (req) => {
   if (!game_id) return new Response('game_id required', { status: 400 });
 
   await sb.from('games').update({ status: 'ended' }).eq('id', game_id);
-  await sb.rpc('refresh_leaderboard').catch(() => {});
   return new Response(JSON.stringify({ ok: true }));
 });

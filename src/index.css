@@ -5,6 +5,7 @@ html, body, #root { height: 100%; margin: 0; font-family: system-ui, sans-serif;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 100%; gap: 12px; padding: 24px;
 }
+.auth-screen button, .game-select button { padding: 10px 16px; cursor: pointer; }
 
 .game-shell { display: flex; flex-direction: column; height: 100%; }
 
@@ -13,7 +14,7 @@ html, body, #root { height: 100%; margin: 0; font-family: system-ui, sans-serif;
   padding: 8px 16px; background: #0f172a; color: white; font-weight: 600;
 }
 .topbar-game { flex: 1; }
-.topbar-exit { background: transparent; color: white; border: 1px solid #475569; padding: 4px 10px; border-radius: 6px; }
+.topbar-exit { background: transparent; color: white; border: 1px solid #475569; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
 
 .game-body { flex: 1; display: flex; min-height: 0; }
 .map-wrap { flex: 1; min-height: 0; }
@@ -30,14 +31,17 @@ html, body, #root { height: 100%; margin: 0; font-family: system-ui, sans-serif;
 .banner-cancelled { background: #fee2e2; color: #991b1b; }
 
 .schedule-comparison {
-  display: flex; gap: 8px; font-size: 14px; padding: 6px 10px;
+  display: flex; flex-wrap: wrap; gap: 8px; font-size: 14px; padding: 6px 10px;
   background: #f1f5f9; border-radius: 6px;
 }
 .delay-late  { color: #b91c1c; font-weight: 600; }
 .delay-early { color: #1d4ed8; font-weight: 600; }
 
-.scoreboard ol { padding-left: 20px; margin: 8px 0; }
+.scoreboard h3 { margin: 8px 0 4px; font-size: 14px; }
+.scoreboard ol { padding-left: 20px; margin: 0; }
 .scoreboard .is-me { font-weight: 700; color: #0f172a; }
+
+.side-actions button { width: 100%; padding: 10px; cursor: pointer; }
 
 .prompt-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.5);
@@ -45,11 +49,14 @@ html, body, #root { height: 100%; margin: 0; font-family: system-ui, sans-serif;
 }
 .prompt { background: white; padding: 20px; border-radius: 10px; max-width: 360px; }
 .prompt-actions { display: flex; gap: 8px; margin-top: 12px; }
+.prompt-actions button { padding: 8px 12px; cursor: pointer; }
 
-.me-dot   { background: #0ea5e9; border: 2px solid white; border-radius: 50%; }
+.me-dot   { background: #0ea5e9; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 0 2px #0ea5e9; }
 .peer-dot { background: #f59e0b; border: 2px solid white; border-radius: 50%; }
 
 @media (max-width: 720px) {
   .game-body { flex-direction: column; }
-  .side-panel { width: 100%; max-height: 45vh; border-left: none; border-top: 1px solid #e2e8f0; }
+  .side-panel {
+    width: 100%; max-height: 45vh; border-left: none; border-top: 1px solid #e2e8f0;
+  }
 }
