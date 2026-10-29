@@ -7,7 +7,7 @@
  * │   ├── supabase.js
  * │   ├── App.jsx
  * │   ├── Game.jsx
- * │   ├── Map.jsx  <-- YOU ARE HERE
+ * │   ├── Map.jsx  <-- YOU ARE HERE 
  * │   ├── useGpsTracker.js
  * │   ├── TripStatusBanner.jsx
  * │   ├── AlightPrompt.jsx
