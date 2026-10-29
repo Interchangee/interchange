@@ -34,7 +34,8 @@ export default function App() {
         Continue with Google
       </button>
       <button onClick={async () => {
-        const email = prompt('Email:')!;
+        const email = prompt('Email:');
+        if (!email) return;
         await supabase.auth.signInWithOtp({ email });
         alert('Check your email for the magic link.');
       }}>
