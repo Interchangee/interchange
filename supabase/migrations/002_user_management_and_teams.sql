@@ -1,179 +1,222 @@
 -- ============================================================
 -- 002_user_management_and_teams.sql
--- Adds teams, hierarchical RLS, and custom JWT claims
+-- ============================================================
+-- Requires: 001 migration already created public.profiles with
+--   id uuid pk, username text, email text, role text,
+--   gamemaster_id uuid null references profiles(id)
 -- ============================================================
 
+-- ------------------------------------------------------------------
 -- 1. Teams table
-create table public.teams (
+-- ------------------------------------------------------------------
+create table if not exists public.teams (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   gamemaster_id uuid not null references public.profiles(id) on delete cascade,
-  created_at timestamptz default now()
+  created_at timestamptz not null default now()
 );
 
--- Teams are unique per gamemaster
-create unique index teams_gamemaster_name_idx
+create unique index if not exists teams_gamemaster_name_idx
   on public.teams (lower(name), gamemaster_id);
 
--- 2. Link players to a team
+-- ------------------------------------------------------------------
+-- 2. Add team_id to profiles
+-- ------------------------------------------------------------------
 alter table public.profiles
-  add column team_id uuid references public.teams(id) on delete set null;
+  add column if not exists team_id uuid references public.teams(id) on delete set null;
 
--- 3. Custom access token hook to embed role & gamemaster_id in JWT
-create or replace function public.custom_access_token_hook(event jsonb)
-returns jsonb
-language plpgsql
-stable
-as $$
+create index if not exists profiles_team_id_idx on public.profiles (team_id);
+create index if not exists profiles_gamemaster_id_idx on public.profiles (gamemaster_id);
+
+-- ------------------------------------------------------------------
+-- 3. Rework username uniqueness:
+--    staff -> globally unique (case-insensitive)
+--    players -> unique per gamemaster (case-insensitive)
+-- ------------------------------------------------------------------
+-- Drop any pre-existing global unique constraint/index on (username)
+do $$
 declare
-  claims jsonb;
-  user_role text;
-  gm_id uuid;
+  r record;
 begin
-  -- Fetch role and gamemaster_id for the user
-  select role, gamemaster_id
-    into user_role, gm_id
-    from public.profiles
-   where id = (event->>'user_id')::uuid;
+  for r in (
+    select conname
+    from pg_constraint
+    where conrelid = 'public.profiles'::regclass
+      and contype = 'u'
+      and pg_get_constraintdef(oid) ilike '%(username)%'
+  ) loop
+    execute format('alter table public.profiles drop constraint %I', r.conname);
+  end loop;
 
-  claims := event->'claims';
+  for r in (
+    select indexname
+    from pg_indexes
+    where schemaname = 'public'
+      and tablename  = 'profiles'
+      and indexdef ilike '%unique%'
+      and indexdef ilike '%(username)%'
+  ) loop
+    execute format('drop index if exists public.%I', r.indexname);
+  end loop;
+end $$;
 
-  if user_role is not null then
-    claims := jsonb_set(claims, '{user_role}', to_jsonb(user_role));
-  else
-    claims := jsonb_set(claims, '{user_role}', 'null');
-  end if;
+-- Global unique for staff
+create unique index if not exists profiles_staff_username_unique
+  on public.profiles (lower(username))
+  where role in ('admin', 'manager', 'gamemaster');
 
-  if gm_id is not null then
-    claims := jsonb_set(claims, '{gamemaster_id}', to_jsonb(gm_id));
-  else
-    claims := jsonb_set(claims, '{gamemaster_id}', 'null');
-  end if;
+-- Per-gamemaster unique for players
+create unique index if not exists profiles_player_username_unique
+  on public.profiles (lower(username), gamemaster_id)
+  where role = 'player';
 
-  event := jsonb_set(event, '{claims}', claims);
-  return event;
-end;
-$$;
-
-grant execute on function public.custom_access_token_hook to supabase_auth_admin;
-revoke execute on function public.custom_access_token_hook from authenticated, anon, public;
-
--- 4. Helper functions for RLS
+-- ------------------------------------------------------------------
+-- 4. Helper functions (SECURITY DEFINER so no JWT hook is needed)
+-- ------------------------------------------------------------------
 create or replace function public.current_user_role()
 returns text
 language sql
 stable
+security definer
+set search_path = ''
 as $$
-  select coalesce(auth.jwt() ->> 'user_role', '');
+  select role from public.profiles where id = auth.uid() limit 1;
 $$;
 
 create or replace function public.current_user_gamemaster_id()
 returns uuid
 language sql
 stable
+security definer
+set search_path = ''
 as $$
-  select nullif(auth.jwt() ->> 'gamemaster_id', '')::uuid;
+  select gamemaster_id from public.profiles where id = auth.uid() limit 1;
 $$;
 
--- 5. Enable RLS on profiles and teams
+grant execute on function public.current_user_role()           to authenticated;
+grant execute on function public.current_user_gamemaster_id()  to authenticated;
+
+-- ------------------------------------------------------------------
+-- 5. Enable RLS
+-- ------------------------------------------------------------------
 alter table public.profiles enable row level security;
-alter table public.teams enable row level security;
+alter table public.teams     enable row level security;
 
--- 6. Policies for profiles -------------------------------------------------
+-- ------------------------------------------------------------------
+-- 6. Drop any old policies so this migration is idempotent
+-- ------------------------------------------------------------------
+do $$
+declare
+  r record;
+begin
+  for r in (
+    select policyname
+    from pg_policies
+    where schemaname = 'public' and tablename = 'profiles'
+  ) loop
+    execute format('drop policy if exists %I on public.profiles', r.policyname);
+  end loop;
+  for r in (
+    select policyname
+    from pg_policies
+    where schemaname = 'public' and tablename = 'teams'
+  ) loop
+    execute format('drop policy if exists %I on public.teams', r.policyname);
+  end loop;
+end $$;
 
--- SELECT: hierarchical visibility
-drop policy if exists "Profiles are viewable by everyone" on public.profiles;
-
-create policy "Admins can view all profiles"
+-- ------------------------------------------------------------------
+-- 7. Profiles policies
+-- ------------------------------------------------------------------
+-- SELECT
+create policy "profiles_select_admin"
   on public.profiles for select
   using (public.current_user_role() = 'admin');
 
-create policy "Managers can view all profiles"
+create policy "profiles_select_manager"
   on public.profiles for select
   using (public.current_user_role() = 'manager');
 
-create policy "Gamemasters can view players in their game and themselves"
+create policy "profiles_select_gamemaster"
   on public.profiles for select
   using (
     public.current_user_role() = 'gamemaster'
     and (
-      id = auth.uid()  -- can see own profile
-      or gamemaster_id = auth.uid()  -- players under this gamemaster
+      id = auth.uid()
+      or gamemaster_id = auth.uid()
     )
   );
 
-create policy "Players can view players in their game"
+create policy "profiles_select_player"
   on public.profiles for select
   using (
     public.current_user_role() = 'player'
     and gamemaster_id = public.current_user_gamemaster_id()
   );
 
--- INSERT / UPDATE / DELETE: hierarchical manipulation
-
--- Admin: full access
-create policy "Admins can insert profiles"
+-- INSERT
+create policy "profiles_insert_admin"
   on public.profiles for insert
   with check (public.current_user_role() = 'admin');
 
-create policy "Admins can update profiles"
+create policy "profiles_insert_manager"
+  on public.profiles for insert
+  with check (
+    public.current_user_role() = 'manager'
+    and role in ('gamemaster', 'player')
+  );
+
+create policy "profiles_insert_gamemaster"
+  on public.profiles for insert
+  with check (
+    public.current_user_role() = 'gamemaster'
+    and role = 'player'
+    and gamemaster_id = auth.uid()
+  );
+
+-- UPDATE
+create policy "profiles_update_admin"
   on public.profiles for update
   using (public.current_user_role() = 'admin')
   with check (public.current_user_role() = 'admin');
 
-create policy "Admins can delete profiles"
+create policy "profiles_update_manager"
+  on public.profiles for update
+  using (
+    public.current_user_role() = 'manager'
+    and role in ('gamemaster', 'player')
+  )
+  with check (
+    public.current_user_role() = 'manager'
+    and role in ('gamemaster', 'player')
+  );
+
+create policy "profiles_update_gamemaster"
+  on public.profiles for update
+  using (
+    public.current_user_role() = 'gamemaster'
+    and role = 'player'
+    and gamemaster_id = auth.uid()
+  )
+  with check (
+    public.current_user_role() = 'gamemaster'
+    and role = 'player'
+    and gamemaster_id = auth.uid()
+  );
+
+-- DELETE
+create policy "profiles_delete_admin"
   on public.profiles for delete
   using (public.current_user_role() = 'admin');
 
--- Manager: can manage gamemasters and players (not other admins/managers)
-create policy "Managers can insert gamemasters and players"
-  on public.profiles for insert
-  with check (
-    public.current_user_role() = 'manager'
-    and role in ('gamemaster', 'player')
-  );
-
-create policy "Managers can update gamemasters and players"
-  on public.profiles for update
-  using (
-    public.current_user_role() = 'manager'
-    and role in ('gamemaster', 'player')
-  )
-  with check (
-    public.current_user_role() = 'manager'
-    and role in ('gamemaster', 'player')
-  );
-
-create policy "Managers can delete gamemasters and players"
+create policy "profiles_delete_manager"
   on public.profiles for delete
   using (
     public.current_user_role() = 'manager'
     and role in ('gamemaster', 'player')
   );
 
--- Gamemaster: can only manage players in their own game
-create policy "Gamemasters can insert players in their game"
-  on public.profiles for insert
-  with check (
-    public.current_user_role() = 'gamemaster'
-    and role = 'player'
-    and gamemaster_id = auth.uid()
-  );
-
-create policy "Gamemasters can update players in their game"
-  on public.profiles for update
-  using (
-    public.current_user_role() = 'gamemaster'
-    and role = 'player'
-    and gamemaster_id = auth.uid()
-  )
-  with check (
-    public.current_user_role() = 'gamemaster'
-    and role = 'player'
-    and gamemaster_id = auth.uid()
-  );
-
-create policy "Gamemasters can delete players in their game"
+create policy "profiles_delete_gamemaster"
   on public.profiles for delete
   using (
     public.current_user_role() = 'gamemaster'
@@ -181,69 +224,60 @@ create policy "Gamemasters can delete players in their game"
     and gamemaster_id = auth.uid()
   );
 
--- Players have no insert/update/delete rights on profiles (read-only)
-
--- 7. Policies for teams ----------------------------------------------------
-
--- SELECT: same visibility as players (admins/managers see all, gamemasters see their teams, players see teams in their game)
-create policy "Admins can view all teams"
+-- ------------------------------------------------------------------
+-- 8. Teams policies
+-- ------------------------------------------------------------------
+-- SELECT
+create policy "teams_select_admin"
   on public.teams for select
   using (public.current_user_role() = 'admin');
 
-create policy "Managers can view all teams"
+create policy "teams_select_manager"
   on public.teams for select
   using (public.current_user_role() = 'manager');
 
-create policy "Gamemasters can view their own teams"
+create policy "teams_select_gamemaster"
   on public.teams for select
   using (
     public.current_user_role() = 'gamemaster'
     and gamemaster_id = auth.uid()
   );
 
-create policy "Players can view teams in their game"
+create policy "teams_select_player"
   on public.teams for select
   using (
     public.current_user_role() = 'player'
     and gamemaster_id = public.current_user_gamemaster_id()
   );
 
--- INSERT / UPDATE / DELETE: anyone who can manipulate players can manipulate teams
-
-create policy "Admins can insert teams"
+-- INSERT
+create policy "teams_insert_admin"
   on public.teams for insert
   with check (public.current_user_role() = 'admin');
 
-create policy "Admins can update teams"
-  on public.teams for update
-  using (public.current_user_role() = 'admin')
-  with check (public.current_user_role() = 'admin');
-
-create policy "Admins can delete teams"
-  on public.teams for delete
-  using (public.current_user_role() = 'admin');
-
-create policy "Managers can insert teams"
+create policy "teams_insert_manager"
   on public.teams for insert
   with check (public.current_user_role() = 'manager');
 
-create policy "Managers can update teams"
-  on public.teams for update
-  using (public.current_user_role() = 'manager')
-  with check (public.current_user_role() = 'manager');
-
-create policy "Managers can delete teams"
-  on public.teams for delete
-  using (public.current_user_role() = 'manager');
-
-create policy "Gamemasters can insert teams in their game"
+create policy "teams_insert_gamemaster"
   on public.teams for insert
   with check (
     public.current_user_role() = 'gamemaster'
     and gamemaster_id = auth.uid()
   );
 
-create policy "Gamemasters can update teams in their game"
+-- UPDATE
+create policy "teams_update_admin"
+  on public.teams for update
+  using (public.current_user_role() = 'admin')
+  with check (public.current_user_role() = 'admin');
+
+create policy "teams_update_manager"
+  on public.teams for update
+  using (public.current_user_role() = 'manager')
+  with check (public.current_user_role() = 'manager');
+
+create policy "teams_update_gamemaster"
   on public.teams for update
   using (
     public.current_user_role() = 'gamemaster'
@@ -254,11 +288,18 @@ create policy "Gamemasters can update teams in their game"
     and gamemaster_id = auth.uid()
   );
 
-create policy "Gamemasters can delete teams in their game"
+-- DELETE
+create policy "teams_delete_admin"
+  on public.teams for delete
+  using (public.current_user_role() = 'admin');
+
+create policy "teams_delete_manager"
+  on public.teams for delete
+  using (public.current_user_role() = 'manager');
+
+create policy "teams_delete_gamemaster"
   on public.teams for delete
   using (
     public.current_user_role() = 'gamemaster'
     and gamemaster_id = auth.uid()
   );
-
--- Players cannot modify teams

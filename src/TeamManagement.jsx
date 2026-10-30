@@ -1,36 +1,38 @@
 /* src/TeamManagement.jsx */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from './supabase'
 import {
   DndContext,
-  closestCenter,
+  DragOverlay,
   PointerSensor,
+  closestCenter,
+  useDroppable,
   useSensor,
   useSensors,
-  DragOverlay,
 } from '@dnd-kit/core'
 import {
   SortableContext,
-  verticalListSortingStrategy,
   useSortable,
+  verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
-/* ---------- Sortable Player ---------- */
-function SortablePlayer({ player }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: player.id,
-    data: { player },
-  })
+/* ---------- SortablePlayer ---------- */
+function SortablePlayer({ player, disabled }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: player.id, data: { player }, disabled })
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
     padding: '6px 10px',
     marginBottom: 4,
-    background: isDragging ? '#ddd' : '#f9f9f9',
+    background: isDragging ? '#e0e0e0' : '#f7f7f7',
+    border: '1px solid #ddd',
     borderRadius: 4,
-    cursor: 'grab',
+    cursor: disabled ? 'default' : 'grab',
+    opacity: isDragging ? 0.4 : 1,
+    userSelect: 'none',
   }
 
   return (
@@ -40,172 +42,176 @@ function SortablePlayer({ player }) {
   )
 }
 
-/* ---------- Droppable Container ---------- */
-function DroppableContainer({ id, title, players, children }) {
-  const { setNodeRef, isOver } = useDroppable({ id })
+/* ---------- DroppableContainer ---------- */
+function DroppableContainer({ id, title, players, disabled }) {
+  const { setNodeRef, isOver } = useDroppable({ id, disabled })
 
   return (
     <div
       ref={setNodeRef}
       style={{
-        background: isOver ? '#e0f0ff' : '#fff',
-        border: '1px dashed #ccc',
+        background: isOver && !disabled ? '#e6f3ff' : '#fff',
+        border: '1px dashed #bbb',
         borderRadius: 6,
         padding: 8,
-        minHeight: 120,
+        minHeight: 140,
       }}
     >
-      <h4>{title}</h4>
+      <h4 style={{ margin: '0 0 8px' }}>{title}</h4>
       {players.length === 0 ? (
-        <p style={{ color: '#aaa' }}>Drop players here</p>
+        <p style={{ color: '#aaa', margin: 0 }}>Drop players here</p>
       ) : (
         <SortableContext items={players.map((p) => p.id)} strategy={verticalListSortingStrategy}>
-          {children}
+          {players.map((p) => (
+            <SortablePlayer key={p.id} player={p} disabled={disabled} />
+          ))}
         </SortableContext>
       )}
     </div>
   )
 }
 
-/* ---------- Main TeamManagement ---------- */
+/* ---------- TeamManagement ---------- */
 export default function TeamManagement({ session }) {
-  const [teams, setTeams] = useState([])
+  const [teams, setTeams]     = useState([])
   const [players, setPlayers] = useState([])
+  const [gamemasters, setGamemasters] = useState([]) // only for admin/manager
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [activePlayer, setActivePlayer] = useState(null)
+  const [error, setError]     = useState('')
+  const [noProfile, setNoProfile] = useState(false)
 
   const [currentRole, setCurrentRole] = useState('')
-  const [currentGmId, setCurrentGmId] = useState('')
+  const [activePlayer, setActivePlayer] = useState(null)
 
-  // Form for new team
-  const [newTeamName, setNewTeamName] = useState('')
+  const [newTeamName, setNewTeamName]       = useState('')
+  const [newTeamGmId, setNewTeamGmId]       = useState('')
 
-  const sensors = useSensors(useSensor(PointerSensor))
+  const myUserId = session.user.id
 
-  /* ---------- Data loading ---------- */
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      // current user
-      const { data: me } = await supabase
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  /* ---------- load ---------- */
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+
+    const { data: me, error: meErr } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', myUserId)
+      .maybeSingle()
+
+    if (meErr) { setError(meErr.message); setLoading(false); return }
+    if (!me)   { setNoProfile(true);  setLoading(false); return }
+    setNoProfile(false)
+    setCurrentRole(me.role)
+
+    const [teamsRes, playersRes] = await Promise.all([
+      supabase.from('teams').select('*').order('name'),
+      supabase.from('profiles').select('*').eq('role', 'player').order('username'),
+    ])
+
+    if (teamsRes.error)   { setError(teamsRes.error.message);   setLoading(false); return }
+    if (playersRes.error) { setError(playersRes.error.message); setLoading(false); return }
+
+    setTeams(teamsRes.data ?? [])
+    setPlayers(playersRes.data ?? [])
+
+    if (me.role === 'admin' || me.role === 'manager') {
+      const { data: gms, error: gmErr } = await supabase
         .from('profiles')
-        .select('role, gamemaster_id')
-        .eq('id', session.user.id)
-        .single()
-
-      if (!me) {
-        setError('Profile not found')
-        setLoading(false)
-        return
-      }
-      setCurrentRole(me.role)
-      setCurrentGmId(me.gamemaster_id)
-
-      // teams (RLS will filter)
-      const { data: teamData, error: teamErr } = await supabase
-        .from('teams')
-        .select('*')
-        .order('name')
-
-      // players (RLS will filter – only players in the relevant scope)
-      const { data: playerData, error: playerErr } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('role', 'player')
+        .select('id, username')
+        .eq('role', 'gamemaster')
         .order('username')
-
-      if (teamErr || playerErr) {
-        setError((teamErr || playerErr).message)
-      } else {
-        setTeams(teamData)
-        setPlayers(playerData)
-      }
-      setLoading(false)
+      if (!gmErr) setGamemasters(gms ?? [])
+    } else {
+      setGamemasters([])
     }
 
-    load()
-  }, [session])
+    setLoading(false)
+  }, [myUserId])
 
-  /* ---------- Permission helpers ---------- */
+  useEffect(() => { load() }, [load])
+
+  /* ---------- permissions ---------- */
   const canModifyTeam = (team) => {
     if (currentRole === 'admin' || currentRole === 'manager') return true
-    if (currentRole === 'gamemaster' && team.gamemaster_id === currentGmId) return true
+    if (currentRole === 'gamemaster' && team.gamemaster_id === myUserId) return true
     return false
   }
 
   const canMovePlayer = (player) => {
     if (currentRole === 'admin' || currentRole === 'manager') return true
-    if (currentRole === 'gamemaster' && player.gamemaster_id === currentGmId) return true
+    if (currentRole === 'gamemaster' && player.gamemaster_id === myUserId) return true
     return false
   }
 
-  /* ---------- Team CRUD ---------- */
+  const canCreateTeam = currentRole === 'admin' || currentRole === 'manager' || currentRole === 'gamemaster'
+
+  /* ---------- team CRUD ---------- */
   const createTeam = async (e) => {
     e.preventDefault()
-    if (!newTeamName.trim()) return
+    setError('')
+    const name = newTeamName.trim()
+    if (!name) return
 
-    const gamemasterId =
-      currentRole === 'gamemaster' ? session.user.id : currentGmId || null
+    const gmId = currentRole === 'gamemaster' ? myUserId : newTeamGmId
+    if (!gmId) { setError('Please select which gamemaster owns this team.'); return }
 
-    const { data, error: insErr } = await supabase
+    const { error: insErr } = await supabase
       .from('teams')
-      .insert([{ name: newTeamName.trim(), gamemaster_id: gamemasterId }])
-      .select()
+      .insert([{ name, gamemaster_id: gmId }])
 
-    if (insErr) {
-      setError(insErr.message)
-      return
-    }
-    setTeams([...teams, ...data])
+    if (insErr) { setError(insErr.message); return }
     setNewTeamName('')
+    setNewTeamGmId('')
+    await load()
   }
 
-  const deleteTeam = async (teamId) => {
-    if (!window.confirm('Delete this team?')) return
-    const { error: delErr } = await supabase.from('teams').delete().eq('id', teamId)
-    if (delErr) {
-      setError(delErr.message)
-      return
-    }
-    setTeams(teams.filter((t) => t.id !== teamId))
-    // unassign players that belonged to this team
-    setPlayers(players.map((p) => (p.team_id === teamId ? { ...p, team_id: null } : p)))
+  const deleteTeam = async (team) => {
+    if (!window.confirm(`Delete team "${team.name}"?`)) return
+    const { error: delErr } = await supabase.from('teams').delete().eq('id', team.id)
+    if (delErr) { setError(delErr.message); return }
+    await load()
   }
 
-  /* ---------- Drag & drop ---------- */
-  const findContainer = (id) => {
-    if (id === 'unassigned') return 'unassigned'
-    const team = teams.find((t) => t.id === id)
-    return team ? team.id : null
+  /* ---------- drag & drop ---------- */
+  const findTeamOfPlayer = (playerId) => {
+    const p = players.find((x) => x.id === playerId)
+    return p ? (p.team_id || null) : undefined
   }
 
   const handleDragStart = (event) => {
-    const playerId = event.active.id
-    const player = players.find((p) => p.id === playerId)
-    setActivePlayer(player)
+    const p = players.find((x) => x.id === event.active.id)
+    setActivePlayer(p ?? null)
   }
 
   const handleDragEnd = async (event) => {
     const { active, over } = event
     setActivePlayer(null)
-
     if (!over) return
 
     const playerId = active.id
-    const overId = over.id
+    const overId   = over.id
+    if (playerId === overId) return
 
     const player = players.find((p) => p.id === playerId)
     if (!player || !canMovePlayer(player)) return
 
-    let newTeamId = null
-    if (overId !== 'unassigned') {
-      const targetTeam = teams.find((t) => t.id === overId)
-      if (!targetTeam) return
-      newTeamId = targetTeam.id
+    // Resolve target team (over.id may be a container OR a player)
+    let newTeamId
+    if (overId === 'unassigned') {
+      newTeamId = null
+    } else if (teams.some((t) => t.id === overId)) {
+      newTeamId = overId
+    } else {
+      // dropped onto another player
+      newTeamId = findTeamOfPlayer(overId)
+      if (newTeamId === undefined) return // over was neither container nor player
     }
 
-    if (player.team_id === newTeamId) return
+    const prevTeamId = player.team_id ?? null
+    if (prevTeamId === newTeamId) return
 
     // Optimistic update
     setPlayers((prev) =>
@@ -219,33 +225,55 @@ export default function TeamManagement({ session }) {
 
     if (upErr) {
       setError(upErr.message)
-      // revert
+      // Revert
       setPlayers((prev) =>
-        prev.map((p) => (p.id === playerId ? { ...p, team_id: player.team_id } : p))
+        prev.map((p) => (p.id === playerId ? { ...p, team_id: prevTeamId } : p))
       )
     }
   }
 
-  /* ---------- Render ---------- */
-  if (loading) return <p>Loading teams…</p>
+  /* ---------- render ---------- */
+  if (loading)   return <p>Loading teams…</p>
+  if (noProfile) return <p>Your account has no profile yet. Ask an admin to assign you a role.</p>
 
-  const unassignedPlayers = players.filter((p) => !p.team_id)
+  // Group teams by gamemaster for display
+  const teamsByGm = useMemo(() => {
+    const map = new Map()
+    for (const t of teams) {
+      if (!map.has(t.gamemaster_id)) map.set(t.gamemaster_id, [])
+      map.get(t.gamemaster_id).push(t)
+    }
+    return map
+  }, [teams])
+
+  const unassigned = players.filter((p) => !p.team_id)
 
   return (
     <div>
-      <h2>Team Management</h2>
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+      <h2>Teams</h2>
+      {error && <p style={{ color: 'crimson' }}>{error}</p>}
 
-      {/* Create team form */}
-      {['admin', 'manager', 'gamemaster'].includes(currentRole) && (
-        <form onSubmit={createTeam} style={{ marginBottom: 16 }}>
+      {canCreateTeam && (
+        <form onSubmit={createTeam} style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input
             placeholder="New team name"
             value={newTeamName}
             onChange={(e) => setNewTeamName(e.target.value)}
-            style={{ marginRight: 8 }}
+            required
           />
-          <button type="submit">Create Team</button>
+          {(currentRole === 'admin' || currentRole === 'manager') && (
+            <select
+              value={newTeamGmId}
+              onChange={(e) => setNewTeamGmId(e.target.value)}
+              required
+            >
+              <option value="">— Gamemaster —</option>
+              {gamemasters.map((g) => (
+                <option key={g.id} value={g.id}>{g.username}</option>
+              ))}
+            </select>
+          )}
+          <button type="submit">Create team</button>
         </form>
       )}
 
@@ -257,32 +285,44 @@ export default function TeamManagement({ session }) {
       >
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           {/* Unassigned pool */}
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <DroppableContainer id="unassigned" title="Unassigned Players" players={unassignedPlayers}>
-              {unassignedPlayers.map((p) => (
-                <SortablePlayer key={p.id} player={p} />
-              ))}
+          <div style={{ minWidth: 240, flex: '0 0 240px' }}>
+            <DroppableContainer id="unassigned" title="Unassigned players" players={unassigned}>
+              {/* children rendered internally */}
             </DroppableContainer>
           </div>
 
-          {/* Teams */}
-          {teams.map((team) => {
-            const teamPlayers = players.filter((p) => p.team_id === team.id)
+          {/* Teams grouped by gamemaster */}
+          {[...teamsByGm.entries()].map(([gmId, gmTeams]) => {
+            const gm = gamemasters.find((g) => g.id === gmId)
             return (
-              <div key={team.id} style={{ flex: 1, minWidth: 220 }}>
-                <DroppableContainer id={team.id} title={team.name} players={teamPlayers}>
-                  {teamPlayers.map((p) => (
-                    <SortablePlayer key={p.id} player={p} />
-                  ))}
-                </DroppableContainer>
-                {canModifyTeam(team) && (
-                  <button
-                    onClick={() => deleteTeam(team.id)}
-                    style={{ marginTop: 4, color: 'red' }}
-                  >
-                    Delete Team
-                  </button>
-                )}
+              <div key={gmId} style={{ flex: 1, minWidth: 260 }}>
+                <h3 style={{ marginTop: 0 }}>
+                  {gm ? gm.username : 'Your teams'}
+                </h3>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  {gmTeams.map((team) => {
+                    const teamPlayers = players.filter((p) => p.team_id === team.id)
+                    const editable = canModifyTeam(team)
+                    return (
+                      <div key={team.id} style={{ flex: '1 1 200px', minWidth: 200 }}>
+                        <DroppableContainer
+                          id={team.id}
+                          title={team.name}
+                          players={teamPlayers}
+                          disabled={!editable}
+                        />
+                        {editable && (
+                          <button
+                            onClick={() => deleteTeam(team)}
+                            style={{ marginTop: 4, color: 'crimson' }}
+                          >
+                            Delete team
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )
           })}

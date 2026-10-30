@@ -7,33 +7,36 @@ import TeamManagement from './TeamManagement'
 
 export default function App() {
   const [session, setSession] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [loading, setLoading]   = useState(true)
+  const [error, setError]       = useState('')
 
-  // Login states
-  const [loginMode, setLoginMode] = useState('player') // 'player' | 'standard'
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [gmName, setGmName] = useState('')
+  // login form state
+  const [loginMode, setLoginMode] = useState('player') // 'player' | 'staff'
+  const [email, setEmail]         = useState('')
+  const [password, setPassword]   = useState('')
+  const [gmName, setGmName]       = useState('')
   const [playerName, setPlayerName] = useState('')
 
-  // Active tab
-  const [activeTab, setActiveTab] = useState('game') // 'game' | 'users' | 'teams'
+  // tabs
+  const [activeTab, setActiveTab] = useState('game')
 
-  // Mock game for prototype
+  // Placeholder game – replace with real source later
   const game = { id: 'test-game-123', name: 'Swiss Transit Challenge' }
 
   useEffect(() => {
+    let mounted = true
     supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!mounted) return
       setSession(session)
       setLoading(false)
     })
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => {
+      setSession(s)
     })
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   const handleLogin = async (e) => {
@@ -47,7 +50,7 @@ export default function App() {
         { p_gamemaster_name: gmName, p_player_name: playerName }
       )
       if (rpcError || !fetchedEmail) {
-        setError('Could not find this player under that Gamemaster.')
+        setError('Could not find that player under that gamemaster.')
         return
       }
       targetEmail = fetchedEmail
@@ -60,7 +63,7 @@ export default function App() {
     if (authError) setError(authError.message)
   }
 
-  if (loading) return <div>Loading...</div>
+  if (loading) return <div style={{ padding: 16 }}>Loading…</div>
 
   if (!session) {
     return (
@@ -71,30 +74,30 @@ export default function App() {
             onClick={() => setLoginMode('player')}
             style={{ fontWeight: loginMode === 'player' ? 'bold' : 'normal', marginRight: 10 }}
           >
-            Player Login
+            Player
           </button>
           <button
-            onClick={() => setLoginMode('standard')}
-            style={{ fontWeight: loginMode === 'standard' ? 'bold' : 'normal' }}
+            onClick={() => setLoginMode('staff')}
+            style={{ fontWeight: loginMode === 'staff' ? 'bold' : 'normal' }}
           >
-            Staff Login
+            Staff
           </button>
         </div>
 
-        {error && <p style={{ color: 'red' }}>{error}</p>}
+        {error && <p style={{ color: 'crimson' }}>{error}</p>}
 
         <form onSubmit={handleLogin}>
           {loginMode === 'player' ? (
             <>
               <input
-                placeholder="Gamemaster Name"
+                placeholder="Gamemaster name"
                 value={gmName}
                 onChange={(e) => setGmName(e.target.value)}
                 required
                 style={{ display: 'block', width: '100%', marginBottom: 8 }}
               />
               <input
-                placeholder="Player Name"
+                placeholder="Player name"
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
                 required
@@ -119,38 +122,25 @@ export default function App() {
             required
             style={{ display: 'block', width: '100%', marginBottom: 8 }}
           />
-          <button type="submit" style={{ width: '100%' }}>
-            Log In
-          </button>
+          <button type="submit" style={{ width: '100%' }}>Log in</button>
         </form>
       </div>
     )
   }
 
-  // Authenticated – show tab navigation
+  const tabStyle = (key) => ({
+    fontWeight: activeTab === key ? 'bold' : 'normal',
+    padding: '6px 12px',
+  })
+
   return (
     <div style={{ padding: 16 }}>
-      <header style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <button
-          onClick={() => setActiveTab('game')}
-          style={{ fontWeight: activeTab === 'game' ? 'bold' : 'normal' }}
-        >
-          Game
-        </button>
-        <button
-          onClick={() => setActiveTab('users')}
-          style={{ fontWeight: activeTab === 'users' ? 'bold' : 'normal' }}
-        >
-          Users
-        </button>
-        <button
-          onClick={() => setActiveTab('teams')}
-          style={{ fontWeight: activeTab === 'teams' ? 'bold' : 'normal' }}
-        >
-          Teams
-        </button>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 16 }}>
+        <button style={tabStyle('game')}  onClick={() => setActiveTab('game')}>Game</button>
+        <button style={tabStyle('users')} onClick={() => setActiveTab('users')}>Users</button>
+        <button style={tabStyle('teams')} onClick={() => setActiveTab('teams')}>Teams</button>
         <button onClick={() => supabase.auth.signOut()} style={{ marginLeft: 'auto' }}>
-          Sign Out
+          Sign out
         </button>
       </header>
 
