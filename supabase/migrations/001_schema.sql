@@ -40,5 +40,5 @@ create table public.trip_realtime_state (
 );
 
 -- Insert Mock Data for Prototype
-insert into public.games (id, name) values ('test-game-123', 'Swiss Transit Challenge');
-insert into public.players (id, game_id, display_name) values ('test-player-123', 'test-game-123', 'Prototype Player');
+--insert into public.games (id, name) values ('test-game-123', 'Swiss Transit Challenge');
+--insert into public.players (id, game_id, display_name) values ('test-player-123', 'test-game-123', 'Prototype Player');
